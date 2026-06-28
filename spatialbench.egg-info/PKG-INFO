@@ -1,3 +1,26 @@
+Metadata-Version: 2.4
+Name: spatialbench
+Version: 1.0.0
+Summary: A multimodal spatial biology toolkit for visualisation, segmentation benchmarking, and single-cell analysis.
+Home-page: https://github.com/Felixillion/SpatialBench
+Author: SpatialBench Contributors
+License: MIT
+Project-URL: Homepage, https://github.com/Felixillion/SpatialBench
+Project-URL: Issues, https://github.com/Felixillion/SpatialBench/issues
+Keywords: spatial transcriptomics,xenium,comet,napari,single-cell,multimodal,bioinformatics
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Science/Research
+Classifier: Topic :: Scientific/Engineering :: Bio-Informatics
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Dynamic: home-page
+Dynamic: license-file
+Dynamic: requires-python
+
 # SpatialBench
 
 **SpatialBench** is an open-source Python toolkit accompanying multimodal spatial biology datasets.

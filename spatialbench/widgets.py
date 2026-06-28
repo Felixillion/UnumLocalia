@@ -1245,8 +1245,8 @@ if _QT_AVAILABLE:
             about = QLabel(
                 "<b>SpatialBench v1.0</b><br>"
                 "A multimodal spatial biology toolkit.<br>"
-                "<a href='https://github.com/SpatialBench/SpatialBench'>"
-                "github.com/SpatialBench</a>"
+                "<a href='https://github.com/Felixillion/SpatialBench'>"
+                "github.com/Felixillion/SpatialBench</a>"
             )
             about.setOpenExternalLinks(True)
             about.setWordWrap(True)

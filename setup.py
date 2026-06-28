@@ -17,7 +17,7 @@ setup(
     ),
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/SpatialBench/SpatialBench",
+    url="https://github.com/Felixillion/SpatialBench",
     packages=find_packages(),
     python_requires=">=3.9",
     install_requires=[

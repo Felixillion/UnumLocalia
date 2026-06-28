@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=65", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "spatialbench"
@@ -26,9 +26,8 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/SpatialBench/SpatialBench"
-Documentation = "https://spatialbench.readthedocs.io"
-Issues = "https://github.com/SpatialBench/SpatialBench/issues"
+Homepage = "https://github.com/Felixillion/SpatialBench"
+Issues = "https://github.com/Felixillion/SpatialBench/issues"
 
 [project.scripts]
 spatialbench = "spatialbench.widgets:launch"

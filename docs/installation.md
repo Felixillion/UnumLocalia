@@ -9,7 +9,7 @@ SpatialBench runs locally to handle very large images and datasets. It is writte
 ## Installation Steps
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/SpatialBench/SpatialBench.git
+   git clone https://github.com/Felixillion/SpatialBench.git
    cd SpatialBench
    ```
 

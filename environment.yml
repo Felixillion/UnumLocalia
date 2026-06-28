@@ -4,8 +4,11 @@ channels:
   - defaults
 dependencies:
   - python=3.10
-  # Qt backend — napari will use this automatically
-  - pyqt=5.*
+  - pip=23.1
+  - setuptools=67.8
+  - wheel
+  # Qt backend — pin a concrete PyQt 5 release compatible with napari
+  - pyqt=5.15.9
   - qtpy
   # Core scientific stack
   - numpy>=1.23
@@ -16,19 +19,16 @@ dependencies:
   - scikit-image>=0.20
   - matplotlib>=3.7
   # Spatial biology
-  - napari>=0.4.19
+  - napari=0.4.19
   - tifffile>=2023.1
   - anndata>=0.9
   - scanpy>=1.9
   # Visualisation
   - plotly>=5.14
   # Image processing / polygon rasterisation
-  - opencv>=4.7        # conda-forge provides headless builds
+  - opencv>=4.7
   - shapely>=2.0
   # Development / testing
   - pytest>=7.0
   - pytest-cov
-  - pip
-  - pip:
-      # Install SpatialBench itself in editable mode after env creation
-      - -e .
+
