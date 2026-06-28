@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=65", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "spatialbench"
+version = "1.0.0"
+description = "A multimodal spatial biology toolkit for visualisation, segmentation benchmarking, and single-cell analysis."
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "SpatialBench Contributors"},
+]
+requires-python = ">=3.9"
+keywords = [
+    "spatial transcriptomics", "xenium", "comet", "napari",
+    "single-cell", "multimodal", "bioinformatics",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/SpatialBench/SpatialBench"
+Documentation = "https://spatialbench.readthedocs.io"
+Issues = "https://github.com/SpatialBench/SpatialBench/issues"
+
+[project.scripts]
+spatialbench = "spatialbench.widgets:launch"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
