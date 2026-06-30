@@ -203,41 +203,88 @@ class TranscriptChannelRow(QWidget):
                         try:
                             layer.color = self.color
                         except Exception:
-                            pass
+                            try:
+                                layer.metadata["color"] = self.color
+                            except Exception:
+                                pass
             except Exception:
                 pass
 
     def _remove_layer_by_name(self, name: str):
-        """Try several removal/hide strategies to be robust across viewer implementations."""
+        """Robust removal: try helper, try viewer.layers, try metadata tag, and try viewer-specific removal API."""
+        # 1) try viewer helper
         try:
-            layer = self.sv._get_layer(name)
+            layer = None
+            try:
+                layer = self.sv._get_layer(name)
+            except Exception:
+                layer = None
             if layer is not None:
                 try:
                     layer.visible = False
                 except Exception:
                     pass
                 try:
-                    self.sv.remove_layer(layer)
+                    # prefer viewer API if available
+                    try:
+                        self.sv.remove_layer(layer)
+                    except Exception:
+                        # fallback to viewer.layers removal
+                        if hasattr(self.sv, "viewer") and hasattr(self.sv.viewer, "layers"):
+                            try:
+                                self.sv.viewer.layers.remove(layer)
+                            except Exception:
+                                pass
                     return
                 except Exception:
                     pass
         except Exception:
             pass
 
-        # fallback: search viewer.layers and remove by name
+        # 2) fallback: search viewer.layers for matching names or metadata canonical_name
         try:
             if hasattr(self.sv, "viewer") and hasattr(self.sv.viewer, "layers"):
                 for l in list(self.sv.viewer.layers):
                     try:
-                        if getattr(l, "name", "") == name:
+                        lname = getattr(l, "name", "") or ""
+                        meta = getattr(l, "metadata", {}) or {}
+                        if lname == name or meta.get("canonical_name") == name or f"::tx::{self.gene}" in lname:
                             try:
-                                self.sv.viewer.layers.remove(l)
+                                l.visible = False
+                            except Exception:
+                                pass
+                            try:
+                                # try viewer API removal first
+                                try:
+                                    self.sv.remove_layer(l)
+                                except Exception:
+                                    try:
+                                        self.sv.viewer.layers.remove(l)
+                                    except Exception:
+                                        pass
                             except Exception:
                                 pass
                     except Exception:
                         pass
         except Exception:
             pass
+
+        # 3) last resort: try viewer-specific transcript removal helpers if present
+        try:
+            # Some viewers may expose a remove_transcript_layer API
+            try:
+                self.sv.remove_transcript_layer(name)
+                return
+            except Exception:
+                pass
+            try:
+                self.sv.remove_transcript_layer(self.sv.active_core, self.gene)
+                return
+            except Exception:
+                pass
+        except Exception:
+            pass
+
 
     def _on_change(self, *args):
         core = getattr(self.sv, "active_core", None)
@@ -269,39 +316,78 @@ class TranscriptChannelRow(QWidget):
         if coords.size == 0:
             return
 
-        # Apply COMET or H&E affine if available
+        # Prefer normalized matrices for mapping transcript coords into image pixel frame
         M_com = self.loader.alignment_matrices_comet.get(core)
         M_he = self.loader.alignment_matrices_he.get(core)
         M_use = M_com if M_com is not None else M_he
+
         if M_use is not None:
             try:
                 coords = _apply_affine_to_coords(M_use, coords)
             except Exception:
                 logger.debug("Affine transform failed for transcripts; using raw coords")
 
+        # IMPORTANT: Napari and most image viewers expect coordinates in (row, col) order
+        # i.e., (y, x). Our coords are (x, y) after reading and transforming, so swap columns.
+        try:
+            # coords shape (N,2) -> swap to (y, x)
+            coords = coords[:, [1, 0]]
+        except Exception:
+            pass
+
         # Remove any existing layer first to avoid duplicates
         self._remove_layer_by_name(layer_name)
 
-        # Add transcript layer (try preferred signature, then fallback)
+        # Add transcript layer with canonical name if possible and attach metadata so removal is reliable
         added = False
+        created_layer = None
         try:
-            # preferred: (core, gene, coords, color=..., visible=...)
-            self.sv.add_transcript_layer(core, self.gene, coords, color=self.color, visible=True)
-            added = True
-        except TypeError:
             try:
-                # fallback: (name, coords, color=..., visible=...)
-                self.sv.add_transcript_layer(layer_name, coords, color=self.color, visible=True)
+                # Try name-first signature (some viewers accept name as first arg)
+                created_layer = self.sv.add_transcript_layer(layer_name, coords, color=self.color, visible=True)
                 added = True
-            except Exception as e:
-                logger.exception("Failed to add transcript layer for %s / %s: %s", core, self.gene, e)
-                return
+            except TypeError:
+                # Fallback to (core, gene, coords, ...) then try to rename created layer
+                created_layer = self.sv.add_transcript_layer(core, self.gene, coords, color=self.color, visible=True)
+                added = True
         except Exception as e:
             logger.exception("Failed to add transcript layer for %s / %s: %s", core, self.gene, e)
             return
 
-        if not added:
-            return
+        # Try to canonicalize the layer name and attach metadata so removal can find it reliably
+        try:
+            # If add_transcript_layer returned a layer object, set its name/metadata
+            if created_layer is not None:
+                try:
+                    # Napari Points layers accept .name
+                    created_layer.name = layer_name
+                except Exception:
+                    pass
+                try:
+                    created_layer.metadata = getattr(created_layer, "metadata", {}) or {}
+                    created_layer.metadata["canonical_name"] = layer_name
+                    created_layer.metadata["sb_source"] = f"tx::{self.gene}"
+                except Exception:
+                    pass
+            else:
+                # If no object returned, try to find the layer by likely names and tag it
+                try:
+                    cand = self.sv._get_layer(layer_name) or self.sv._get_layer(self.gene) or self.sv._get_layer(f"{core}::{self.gene}")
+                    if cand is not None:
+                        try:
+                            cand.name = layer_name
+                        except Exception:
+                            pass
+                        try:
+                            cand.metadata = getattr(cand, "metadata", {}) or {}
+                            cand.metadata["canonical_name"] = layer_name
+                            cand.metadata["sb_source"] = f"tx::{self.gene}"
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         # Immediately apply global dot size (prefer viewer stored value, else 25)
         size_val = 25.0
@@ -321,15 +407,25 @@ class TranscriptChannelRow(QWidget):
         except Exception:
             pass
 
-        # Set size on the layer if possible
+        # Set size and color on the actual layer object if we can find it
         try:
-            layer = self.sv._get_layer(layer_name)
+            layer = None
+            try:
+                layer = self.sv._get_layer(layer_name)
+            except Exception:
+                layer = None
             if layer is None and hasattr(self.sv, "viewer") and hasattr(self.sv.viewer, "layers"):
                 for l in self.sv.viewer.layers:
-                    if getattr(l, "name", "") == layer_name:
-                        layer = l
-                        break
+                    try:
+                        lname = getattr(l, "name", "") or ""
+                        if lname == layer_name or (hasattr(l, "metadata") and l.metadata.get("canonical_name") == layer_name) or f"::tx::{self.gene}" in lname:
+                            layer = l
+                            break
+                    except Exception:
+                        pass
+
             if layer is not None:
+                # size
                 try:
                     layer.properties["size"] = size_val
                 except Exception:
@@ -340,6 +436,20 @@ class TranscriptChannelRow(QWidget):
                             layer.metadata["size"] = size_val
                         except Exception:
                             pass
+                # color: try common properties for Napari Points
+                try:
+                    layer.properties["color"] = self.color
+                except Exception:
+                    try:
+                        layer.face_color = self.color
+                    except Exception:
+                        try:
+                            layer.color = self.color
+                        except Exception:
+                            try:
+                                layer.metadata["color"] = self.color
+                            except Exception:
+                                pass
         except Exception:
             pass
 

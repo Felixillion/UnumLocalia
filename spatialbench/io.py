@@ -162,8 +162,19 @@ def read_affine_matrix(path: Path) -> np.ndarray:
     raise ValueError(f"Expected 2x3 or 3x3 matrix in {path}, got {raw.shape}")
 
 def normalize_affine_matrix(M: np.ndarray) -> np.ndarray:
-    """Zero out translation so all cores start at same origin."""
+    """Zero out translation so all cores start at same origin while preserving homogeneous row."""
     M = np.asarray(M, dtype=np.float64).copy()
+    # 2x3 case: zero translation column (last column)
+    if M.ndim == 2 and M.shape == (2, 3):
+        M[:, 2] = 0.0
+        return M
+    # 3x3 case: zero translation entries but keep bottom row [0,0,1]
+    if M.ndim == 2 and M.shape == (3, 3):
+        M[0, 2] = 0.0
+        M[1, 2] = 0.0
+        M[2, :] = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        return M
+    # fallback: if shape unusual, attempt to zero last column if present
     if M.ndim == 2 and M.shape[1] >= 3:
         M[:, 2] = 0.0
     return M
@@ -239,9 +250,12 @@ class DatasetLoader:
         self.cell_boundaries_df: Dict[str, pd.DataFrame] = {}
         self.nucleus_boundaries_df: Dict[str, pd.DataFrame] = {}
         
+        # Alignment
         self.alignment_matrices_comet: Dict[str, np.ndarray] = {}
         self.alignment_matrices_he: Dict[str, np.ndarray] = {}
-        
+        self.alignment_matrices_comet_raw: Dict[str, np.ndarray] = {}
+        self.alignment_matrices_he_raw: Dict[str, np.ndarray] = {}
+
         self.he_arrays: Dict[str, np.ndarray] = {}
         self.comet_arrays: Dict[str, np.ndarray] = {}
         self.comet_markers: Dict[str, List[str]] = {}
@@ -290,17 +304,22 @@ class DatasetLoader:
                     self.nucleus_boundaries_df[core_id] = safe_read_parquet(core.nucleus_boundaries)
                     
             # --- Alignments ---
+            # COMET alignment
             if core.alignment_comet:
                 try:
-                    M = read_affine_matrix(core.alignment_comet)
-                    self.alignment_matrices_comet[core_id] = normalize_affine_matrix(M)
+                    M_raw = read_affine_matrix(core.alignment_comet)
+                    # store raw and normalized separately
+                    self.alignment_matrices_comet_raw[core_id] = M_raw.copy()
+                    self.alignment_matrices_comet[core_id] = normalize_affine_matrix(M_raw)
                 except Exception as e:
                     logger.warning("Failed to load COMET alignment for %s: %s", core_id, e)
             
+            # H&E alignment
             if core.alignment_he:
                 try:
-                    M = read_affine_matrix(core.alignment_he)
-                    self.alignment_matrices_he[core_id] = normalize_affine_matrix(M)
+                    M_raw = read_affine_matrix(core.alignment_he)
+                    self.alignment_matrices_he_raw[core_id] = M_raw.copy()
+                    self.alignment_matrices_he[core_id] = normalize_affine_matrix(M_raw)
                 except Exception as e:
                     logger.warning("Failed to load H&E alignment for %s: %s", core_id, e)
             
