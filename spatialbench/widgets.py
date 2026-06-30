@@ -165,21 +165,21 @@ class TranscriptChannelRow(QWidget):
     """Row controls for a single Gene transcript across all cores."""
     def __init__(self, gene: str, sv, loader, parent=None):
         super().__init__(parent)
-        self.loader = loader
         self.gene = gene
         self.sv = sv
+        self.loader = loader
         self.color = "yellow"
-        
+
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 2, 0, 2)
         row.setSpacing(4)
-        
+
         self.vis_chk = QCheckBox(gene)
         self.vis_chk.setFixedWidth(200)
         self.vis_chk.setChecked(False)
         self.vis_chk.toggled.connect(self._on_change)
         row.addWidget(self.vis_chk)
-        
+
         self.color_btn = QPushButton("■")
         self.color_btn.setStyleSheet(f"color: {self.color}; font-weight: bold; font-size: 16px;")
         self.color_btn.setFixedWidth(30)
@@ -193,14 +193,64 @@ class TranscriptChannelRow(QWidget):
         if c.isValid():
             self.color = c.name()
             self.color_btn.setStyleSheet(f"color: {self.color}; font-weight: bold; font-size: 16px;")
-            self._on_change()
+            # update existing layer color if present
+            try:
+                layer = self.sv._get_layer(f"{self.sv.active_core}::tx::{self.gene}")
+                if layer is not None:
+                    try:
+                        layer.properties["color"] = self.color
+                    except Exception:
+                        try:
+                            layer.color = self.color
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+    def _remove_layer_by_name(self, name: str):
+        """Try several removal/hide strategies to be robust across viewer implementations."""
+        try:
+            layer = self.sv._get_layer(name)
+            if layer is not None:
+                try:
+                    layer.visible = False
+                except Exception:
+                    pass
+                try:
+                    self.sv.remove_layer(layer)
+                    return
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # fallback: search viewer.layers and remove by name
+        try:
+            if hasattr(self.sv, "viewer") and hasattr(self.sv.viewer, "layers"):
+                for l in list(self.sv.viewer.layers):
+                    try:
+                        if getattr(l, "name", "") == name:
+                            try:
+                                self.sv.viewer.layers.remove(l)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     def _on_change(self, *args):
-        core = self.sv.active_core
+        core = getattr(self.sv, "active_core", None)
         if not core:
             return
 
-        # On-demand read of this gene's coordinates
+        layer_name = f"{core}::tx::{self.gene}"
+
+        # If unchecked: remove/hide existing layer
+        if not self.vis_chk.isChecked():
+            self._remove_layer_by_name(layer_name)
+            return
+
         core_manifest = self.loader.manifest.cores.get(core)
         if core_manifest is None or core_manifest.transcripts is None:
             return
@@ -211,19 +261,99 @@ class TranscriptChannelRow(QWidget):
                 filters=[("feature_name", "==", self.gene)],
                 columns=["x_location", "y_location"],
             )
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to read transcripts for %s / %s: %s", core, self.gene, e)
             return
 
-        coords = df_gene[["x_location", "y_location"]].to_numpy()
+        coords = df_gene[["x_location", "y_location"]].to_numpy(dtype=np.float64)
+        if coords.size == 0:
+            return
 
-        # Add/update layer; viewer should handle dot size via global control
-        self.sv.add_transcript_layer(
-            core,
-            self.gene,
-            coords,
-            color=self.color,
-            visible=self.vis_chk.isChecked(),
-        )
+        # Apply COMET or H&E affine if available
+        M_com = self.loader.alignment_matrices_comet.get(core)
+        M_he = self.loader.alignment_matrices_he.get(core)
+        M_use = M_com if M_com is not None else M_he
+        if M_use is not None:
+            try:
+                coords = _apply_affine_to_coords(M_use, coords)
+            except Exception:
+                logger.debug("Affine transform failed for transcripts; using raw coords")
+
+        # Remove any existing layer first to avoid duplicates
+        self._remove_layer_by_name(layer_name)
+
+        # Add transcript layer (try preferred signature, then fallback)
+        added = False
+        try:
+            # preferred: (core, gene, coords, color=..., visible=...)
+            self.sv.add_transcript_layer(core, self.gene, coords, color=self.color, visible=True)
+            added = True
+        except TypeError:
+            try:
+                # fallback: (name, coords, color=..., visible=...)
+                self.sv.add_transcript_layer(layer_name, coords, color=self.color, visible=True)
+                added = True
+            except Exception as e:
+                logger.exception("Failed to add transcript layer for %s / %s: %s", core, self.gene, e)
+                return
+        except Exception as e:
+            logger.exception("Failed to add transcript layer for %s / %s: %s", core, self.gene, e)
+            return
+
+        if not added:
+            return
+
+        # Immediately apply global dot size (prefer viewer stored value, else 25)
+        size_val = 25.0
+        try:
+            if hasattr(self.sv, "_transcript_size"):
+                size_val = float(self.sv._transcript_size)
+            elif hasattr(self.sv, "transcript_size"):
+                size_val = float(getattr(self.sv, "transcript_size"))
+            else:
+                size_val = 25.0
+        except Exception:
+            size_val = 25.0
+
+        try:
+            if hasattr(self.sv, "set_transcript_size"):
+                self.sv.set_transcript_size(size_val)
+        except Exception:
+            pass
+
+        # Set size on the layer if possible
+        try:
+            layer = self.sv._get_layer(layer_name)
+            if layer is None and hasattr(self.sv, "viewer") and hasattr(self.sv.viewer, "layers"):
+                for l in self.sv.viewer.layers:
+                    if getattr(l, "name", "") == layer_name:
+                        layer = l
+                        break
+            if layer is not None:
+                try:
+                    layer.properties["size"] = size_val
+                except Exception:
+                    try:
+                        layer.size = size_val
+                    except Exception:
+                        try:
+                            layer.metadata["size"] = size_val
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+        # Force a viewer refresh if available
+        try:
+            if hasattr(self.sv, "refresh_transcript_layers"):
+                self.sv.refresh_transcript_layers()
+        except Exception:
+            pass
+        try:
+            if hasattr(self.sv, "reset_view"):
+                self.sv.reset_view()
+        except Exception:
+            pass
 
 
 class DataTab(QWidget):
@@ -324,7 +454,7 @@ class LayersTab(QWidget):
         tx_size_layout.addWidget(QLabel("Global Dot Size:"))
         self.tx_size = QDoubleSpinBox()
         self.tx_size.setRange(1.0, 100.0)
-        self.tx_size.setValue(20.0)
+        self.tx_size.setValue(25.0)
         self.tx_size.setSingleStep(1.0)
         self.tx_size.valueChanged.connect(lambda v: self.sv.set_transcript_size(v))
         tx_size_layout.addWidget(self.tx_size)
