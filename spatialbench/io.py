@@ -1,124 +1,76 @@
 """
 spatialbench.io
 ===============
-Dataset discovery, manifest building, and lazy data loading.
+Dataset discovery, manifest building, and lazy data loading for multi-core datasets.
 
 Philosophy
 ----------
-* Auto-detect all modalities in a dataset folder — no manual file selection.
+* Uses `dataset_manifest.csv` to map out per-core files.
 * Use memory-mapped access for large TIFF files (OME-TIFF, H&E) so that only
   the requested tiles are read into RAM.
 * Never modify any file on disk.
-
-Expected dataset layout (files may be in sub-folders or at root)::
-
-    dataset/
-        cells.csv
-        cell_boundaries.parquet
-        nucleus_boundaries.parquet
-        transcripts.parquet
-        matrix.csv                  ← 3×3 affine alignment matrix (legacy)
-        matrix_comet.csv            ← 2x3 or 3x3 affine matrix for COMET (preferred)
-        matrix_he.csv               ← 2x3 or 3x3 affine matrix for H&E (preferred)
-        keypoints_comet.csv         ← optional keypoints (src/dst)
-        keypoints_he.csv            ← optional keypoints (src/dst)
-        he.tif  (or *.tiff)         ← aligned H&E whole-slide image
-        comet/                      ← one OME-TIFF per protein marker
-            CK8.ome.tiff
-            CD45.ome.tiff
-            ...
-        anndata.h5ad  (or *.h5ad)
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import re
+import html
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Any
 
 import numpy as np
 import pandas as pd
 import tifffile
+import zarr
 
 from spatialbench.utils import safe_read_csv, safe_read_parquet
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# File-name patterns for auto-detection
-# ---------------------------------------------------------------------------
-
-_PATTERN_CELLS = re.compile(r"^cells\.csv$", re.IGNORECASE)
-_PATTERN_CELL_BOUNDS = re.compile(r"^cell_boundaries\.parquet$", re.IGNORECASE)
-_PATTERN_NUC_BOUNDS = re.compile(r"^nucleus_boundaries\.parquet$", re.IGNORECASE)
-_PATTERN_TRANSCRIPTS = re.compile(r"^transcripts\.parquet$", re.IGNORECASE)
-_PATTERN_MATRIX = re.compile(r"^matrix\.csv$", re.IGNORECASE)
-_PATTERN_MATRIX_MOD = re.compile(r"^matrix_(?P<modality>\w+)\.csv$", re.IGNORECASE)
-_PATTERN_KEYPOINTS_MOD = re.compile(r"^keypoints_(?P<modality>\w+)\.csv$", re.IGNORECASE)
-_PATTERN_HE = re.compile(r".*\.(tif|tiff)$", re.IGNORECASE)
-_PATTERN_COMET = re.compile(r".*\.ome\.(tif|tiff)$", re.IGNORECASE)
-_PATTERN_ANNDATA = re.compile(r".*\.h5ad$", re.IGNORECASE)
-
-# Sub-folder names associated with COMET images
-_COMET_FOLDER_HINTS = {"comet", "comet_images", "proteins", "multiplex"}
-
 
 # ---------------------------------------------------------------------------
-# DatasetManifest
+# CoreManifest & DatasetManifest
 # ---------------------------------------------------------------------------
 
 @dataclass
-class DatasetManifest:
-    """Paths to all detected files in a SpatialBench dataset.
+class CoreManifest:
+    """Paths to all detected files for a single core."""
+    core_id: str
+    core_folder: Path
+    
+    comet_file: Optional[Path] = None
+    comet_thresholds: Optional[Path] = None
+    he_file: Optional[Path] = None
+    anndata_file: Optional[Path] = None
+    xenium_folder: Optional[Path] = None
+    
+    alignment_comet: Optional[Path] = None
+    alignment_he: Optional[Path] = None
 
-    Any field may be ``None`` if the corresponding file was not found.
-    The manifest is built by :func:`detect_files` and is immutable.
-    """
-
-    folder: Path
-
-    # Xenium
+    # Xenium specific files (resolved from xenium_folder)
     cells: Optional[Path] = None
     cell_boundaries: Optional[Path] = None
     nucleus_boundaries: Optional[Path] = None
     transcripts: Optional[Path] = None
 
-    # Legacy single alignment matrix (3x3)
-    matrix: Optional[Path] = None
 
-    # Per-modality alignment matrices (e.g., 'comet' -> Path('.../matrix_comet.csv'))
-    alignment: Dict[str, Path] = field(default_factory=dict)
+@dataclass
+class DatasetManifest:
+    """Paths to all cores in a SpatialBench dataset."""
+    folder: Path
+    cores: Dict[str, CoreManifest] = field(default_factory=dict)
 
-    # Per-modality keypoints (e.g., 'comet' -> Path('.../keypoints_comet.csv'))
-    keypoints: Dict[str, Path] = field(default_factory=dict)
-
-    # H&E
-    he: Optional[Path] = None
-
-    # COMET — mapping from marker name → file path
-    comet: Dict[str, Path] = field(default_factory=dict)
-
-    # AnnData
-    anndata: Optional[Path] = None
-
-    # ----------------------------------------------------------------
     def summary(self) -> str:
-        """Return a human-readable summary of detected files."""
+        """Return a human-readable summary of detected cores."""
         lines = [f"Dataset folder : {self.folder}"]
-        lines.append(f"  cells.csv    : {'✓' if self.cells else '✗'}")
-        lines.append(f"  cell bounds  : {'✓' if self.cell_boundaries else '✗'}")
-        lines.append(f"  nuc  bounds  : {'✓' if self.nucleus_boundaries else '✗'}")
-        lines.append(f"  transcripts  : {'✓' if self.transcripts else '✗'}")
-        lines.append(f"  matrix.csv   : {'✓' if self.matrix else '✗'}")
-        lines.append(f"  Alignments    : {', '.join(self.alignment.keys()) if self.alignment else '—'}")
-        lines.append(f"  Keypoints     : {', '.join(self.keypoints.keys()) if self.keypoints else '—'}")
-        lines.append(f"  H&E          : {'✓ ' + str(self.he.name) if self.he else '✗'}")
-        lines.append(f"  COMET ({len(self.comet):>2} ch): "
-                     + (", ".join(self.comet) if self.comet else "—"))
-        lines.append(f"  AnnData      : {'✓' if self.anndata else '✗'}")
+        lines.append(f"Found {len(self.cores)} cores:")
+        for cid, core in self.cores.items():
+            lines.append(f"  - {cid}")
+            lines.append(f"      H&E       : {'✓' if core.he_file else '✗'}")
+            lines.append(f"      COMET     : {'✓' if core.comet_file else '✗'}")
+            lines.append(f"      Xenium    : {'✓' if core.xenium_folder else '✗'}")
+            lines.append(f"      AnnData   : {'✓' if core.anndata_file else '✗'}")
         return "\n".join(lines)
 
 
@@ -127,139 +79,66 @@ class DatasetManifest:
 # ---------------------------------------------------------------------------
 
 def detect_files(folder: Path) -> DatasetManifest:
-    """Recursively scan *folder* and build a :class:`DatasetManifest`.
-
-    The function walks the directory tree up to two levels deep to support
-    datasets where COMET images are stored in a sub-folder.
-
-    Parameters
-    ----------
-    folder:
-        Root directory of the dataset.
-
-    Returns
-    -------
-    DatasetManifest
-        Populated manifest (fields are ``None`` when not found).
-
-    Raises
-    ------
-    FileNotFoundError
-        If *folder* does not exist.
-    """
+    """Reads dataset_manifest.csv in folder and builds DatasetManifest."""
     folder = Path(folder).resolve()
-    if not folder.is_dir():
-        raise FileNotFoundError(f"Dataset folder not found: {folder}")
+    manifest_csv = folder / "dataset_manifest.csv"
+    
+    if not manifest_csv.exists():
+        raise FileNotFoundError(f"dataset_manifest.csv not found in {folder}")
 
+    df = pd.read_csv(manifest_csv)
     manifest = DatasetManifest(folder=folder)
-    comet_candidates: List[Path] = []
-    he_candidates: List[Path] = []
 
-    # Collect all files within two levels
-    all_files: List[Path] = []
-    for depth in range(3):  # 0, 1, 2 levels deep
-        pattern = ("*/" * depth) + "*"
-        all_files.extend(folder.glob(pattern))
-
-    # Remove duplicate paths (glob can return duplicates)
-    all_files = sorted(set(p for p in all_files if p.is_file()))
-
-    for fp in all_files:
-        name = fp.name
-
-        # modality-specific matrix (matrix_comet.csv, matrix_he.csv, etc.)
-        m_mod = _PATTERN_MATRIX_MOD.match(name)
-        if m_mod:
-            mod = m_mod.group("modality").lower()
-            manifest.alignment[mod] = fp
+    for _, row in df.iterrows():
+        if pd.isna(row.get('core_id')):
             continue
+            
+        cid = str(row['core_id'])
+        
+        # Resolve core folder if it exists
+        core_folder_str = str(row.get('core_folder', ''))
+        cf = folder / core_folder_str if core_folder_str else folder
+        
+        core = CoreManifest(core_id=cid, core_folder=cf)
 
-        # modality-specific keypoints (keypoints_comet.csv, keypoints_he.csv, etc.)
-        k_mod = _PATTERN_KEYPOINTS_MOD.match(name)
-        if k_mod:
-            mod = k_mod.group("modality").lower()
-            manifest.keypoints[mod] = fp
-            continue
+        if 'comet_file' in row and pd.notna(row['comet_file']):
+            core.comet_file = (folder / str(row['comet_file'])).resolve()
+            thresh = core.comet_file.parent / "comet_thresholding.csv"
+            if thresh.exists():
+                core.comet_thresholds = thresh
 
-        if _PATTERN_CELLS.match(name):
-            manifest.cells = fp
+        if 'he_file' in row and pd.notna(row['he_file']):
+            core.he_file = (folder / str(row['he_file'])).resolve()
+        
+        if 'anndata_file' in row and pd.notna(row['anndata_file']):
+            core.anndata_file = (folder / str(row['anndata_file'])).resolve()
 
-        elif _PATTERN_CELL_BOUNDS.match(name):
-            manifest.cell_boundaries = fp
+        if 'alignment_comet' in row and pd.notna(row['alignment_comet']):
+            core.alignment_comet = (folder / str(row['alignment_comet'])).resolve()
 
-        elif _PATTERN_NUC_BOUNDS.match(name):
-            manifest.nucleus_boundaries = fp
-
-        elif _PATTERN_TRANSCRIPTS.match(name):
-            manifest.transcripts = fp
-
-        elif _PATTERN_MATRIX.match(name):
-            # legacy single matrix.csv
-            manifest.matrix = fp
-
-        elif _PATTERN_ANNDATA.match(name):
-            if manifest.anndata is None:
-                manifest.anndata = fp
-
-        elif _PATTERN_COMET.match(name):
-            # OME-TIFFs (*.ome.tif / *.ome.tiff) → COMET markers
-            comet_candidates.append(fp)
-
-        elif _PATTERN_HE.match(name):
-            # Plain TIFFs that are not OME-TIFFs → H&E candidates
-            if not _PATTERN_COMET.match(name):
-                he_candidates.append(fp)
-
-    # ---- Assign COMET markers -----------------------------------------
-    # Prefer files inside a folder whose name suggests COMET
-    prioritised_comet = [
-        fp for fp in comet_candidates
-        if fp.parent.name.lower() in _COMET_FOLDER_HINTS
-    ]
-    if not prioritised_comet:
-        prioritised_comet = comet_candidates
-
-    for fp in sorted(prioritised_comet):
-        marker_name = _extract_marker_name(fp)
-        manifest.comet[marker_name] = fp
-
-    # ---- Assign H&E -------------------------------------------------------
-    # Prefer the largest file (H&E slides are big) if multiple candidates
-    if he_candidates:
-        he_sorted = sorted(he_candidates, key=lambda p: p.stat().st_size, reverse=True)
-        manifest.he = he_sorted[0]
-        if len(he_sorted) > 1:
-            logger.info(
-                "Multiple TIFF candidates for H&E; selected largest: %s",
-                manifest.he.name,
-            )
-
+        if 'alignment_he' in row and pd.notna(row['alignment_he']):
+            core.alignment_he = (folder / str(row['alignment_he'])).resolve()
+        
+        if 'xenium_folder' in row and pd.notna(row['xenium_folder']):
+            xf = (folder / str(row['xenium_folder'])).resolve()
+            core.xenium_folder = xf
+            # Automatically find the canonical Xenium files inside this folder
+            cells = xf / "cells.csv"
+            if cells.exists(): core.cells = cells
+            
+            cb = xf / "cell_boundaries.parquet"
+            if cb.exists(): core.cell_boundaries = cb
+            
+            nb = xf / "nucleus_boundaries.parquet"
+            if nb.exists(): core.nucleus_boundaries = nb
+            
+            tx = xf / "transcripts.parquet"
+            if tx.exists(): core.transcripts = tx
+            
+        manifest.cores[cid] = core
+    
     logger.info("Dataset manifest built:\n%s", manifest.summary())
     return manifest
-
-
-def _extract_marker_name(path: Path) -> str:
-    """Derive a clean protein marker name from a file path.
-
-    Strips common suffixes like ``.ome``, ``.tif``, ``.tiff``.
-
-    Parameters
-    ----------
-    path:
-        File path of the COMET image.
-
-    Returns
-    -------
-    str
-        Clean marker name (e.g. ``'CK8'``, ``'CD45'``).
-    """
-    name = path.name
-    # Remove extensions
-    for suffix in (".ome.tiff", ".ome.tif", ".tiff", ".tif"):
-        if name.lower().endswith(suffix):
-            name = name[: -len(suffix)]
-            break
-    return name
 
 
 # ---------------------------------------------------------------------------
@@ -278,289 +157,69 @@ def read_affine_matrix(path: Path) -> np.ndarray:
         return raw.reshape(2, 3)
     if raw.size == 9:
         return raw.reshape(3, 3)
-    # Some CSVs may be a single row with 9 values
     if raw.shape[0] == 1 and raw.size == 9:
         return raw.reshape(3, 3)
     raise ValueError(f"Expected 2x3 or 3x3 matrix in {path}, got {raw.shape}")
 
+def normalize_affine_matrix(M: np.ndarray) -> np.ndarray:
+    """Zero out translation so all cores start at same origin."""
+    M = np.asarray(M, dtype=np.float64).copy()
+    if M.ndim == 2 and M.shape[1] >= 3:
+        M[:, 2] = 0.0
+    return M
 
-def read_keypoints(path: Path) -> Tuple[np.ndarray, np.ndarray]:
-    """Read keypoints CSV and return (src_pts, dst_pts) as float32 arrays.
 
-    Accepts headers:
-      - fixedX,fixedY,alignmentX,alignmentY  (Xenium Explorer export)
-      - source_x,source_y,target_x,target_y
-    Or infers columns by position (first two = src, next two = dst).
+# -------------------------
+# Robust image loader (memmap -> imread -> aszarr)
+# -------------------------
+def load_image_robust(path: Path):
+    """Try to load an image robustly. Return numpy array or zarr-like array.
+
+    For .ome.zarr folders:
+      - open with zarr and return the full-res level 0 group.
+
+    For TIFF:
+      - try memmap, then imread, then aszarr.
     """
-    df = pd.read_csv(path)
-    cols = [c.strip().lower() for c in df.columns]
+    # OME-Zarr case: folder ending with .ome.zarr
+    if path.is_dir() and (path.suffix == ".zarr" or path.suffixes == [".ome", ".zarr"]):
+        root = zarr.open(path, mode="r")
+        # full-res level is "0"
+        if "0" in root:
+            logger.info("Opened OME-Zarr %s (level 0)", path.name)
+            return root["0"]
+        logger.info("Opened OME-Zarr %s (no explicit level 0)", path.name)
+        return root
 
-    # Xenium Explorer format
-    if set(['fixedx', 'fixedy', 'alignmentx', 'alignmenty']).issubset(cols):
-        fixedx_i = cols.index('fixedx')
-        fixedy_i = cols.index('fixedy')
-        alignx_i = cols.index('alignmentx')
-        aligny_i = cols.index('alignmenty')
-        dst_x = df.iloc[:, fixedx_i].to_numpy(dtype=np.float32)
-        dst_y = df.iloc[:, fixedy_i].to_numpy(dtype=np.float32)
-        src_x = df.iloc[:, alignx_i].to_numpy(dtype=np.float32)
-        src_y = df.iloc[:, aligny_i].to_numpy(dtype=np.float32)
-    # Generic source/target names
-    elif set(['source_x', 'source_y', 'target_x', 'target_y']).issubset(cols):
-        src_x = df.iloc[:, cols.index('source_x')].to_numpy(dtype=np.float32)
-        src_y = df.iloc[:, cols.index('source_y')].to_numpy(dtype=np.float32)
-        dst_x = df.iloc[:, cols.index('target_x')].to_numpy(dtype=np.float32)
-        dst_y = df.iloc[:, cols.index('target_y')].to_numpy(dtype=np.float32)
-    else:
-        # Try positional inference: first two columns = src, next two = dst
-        arr = df.to_numpy(dtype=np.float32)
-        if arr.shape[1] >= 4:
-            src_x, src_y, dst_x, dst_y = arr[:, 0], arr[:, 1], arr[:, 2], arr[:, 3]
-        else:
-            raise ValueError(f"Unrecognized keypoints format in {path}")
-    src = np.vstack([src_x, src_y]).T
-    dst = np.vstack([dst_x, dst_y]).T
-    return src, dst
-
-
-def transform_points(points: np.ndarray, matrix: np.ndarray) -> np.ndarray:
-    """Apply affine (2x3 or 3x3) to Nx2 points and return Nx2 array."""
-    pts = np.asarray(points, dtype=np.float64)
-    if pts.ndim == 1:
-        pts = pts.reshape(1, 2)
-    if matrix.shape == (2, 3):
-        ones = np.ones((pts.shape[0], 1), dtype=np.float64)
-        homo = np.hstack([pts, ones])  # (N,3)
-        out = homo @ matrix.T
-        return out
-    if matrix.shape == (3, 3):
-        ones = np.ones((pts.shape[0], 1), dtype=np.float64)
-        homo = np.hstack([pts, ones])
-        out_h = homo @ matrix.T
-        return out_h[:, :2]
-    raise ValueError("Matrix must be 2x3 or 3x3")
-
-
-def apply_affine_to_image(image: np.ndarray, matrix: np.ndarray, output_shape: Tuple[int, int]):
-    """Warp image using OpenCV. output_shape is (height, width)."""
+    # TIFF case
     try:
-        import cv2
-    except Exception as exc:
-        raise ImportError("OpenCV (cv2) is required for image warping. Install via conda-forge opencv.") from exc
+        arr = tifffile.memmap(path)
+        arr = np.asarray(arr)
+        logger.info("memmap OK for %s shape=%s", path.name, getattr(arr, "shape", None))
+        return arr
+    except Exception as e_mem:
+        logger.debug("memmap failed for %s: %s", path.name, e_mem)
 
-    if matrix.shape == (3, 3):
-        M = matrix[:2, :]
-    else:
-        M = matrix
-    h, w = output_shape
-    warped = cv2.warpAffine(image, M.astype(np.float32), (w, h), flags=cv2.INTER_LINEAR)
-    return warped
+    try:
+        arr = tifffile.imread(path)
+        arr = np.asarray(arr)
+        logger.info("imread OK for %s shape=%s", path.name, getattr(arr, "shape", None))
+        return arr
+    except Exception as e_im:
+        logger.debug("imread failed for %s: %s", path.name, e_im)
 
-
-def load_alignments(manifest: DatasetManifest) -> Dict[str, np.ndarray]:
-    """Load modality-specific alignment matrices and return dict {modality: matrix}.
-
-    Populates matrices for modalities found in manifest.alignment. If no
-    modality-specific matrices are found but a legacy matrix.csv exists, the
-    legacy matrix is returned under the key 'global'.
-    """
-    matrices: Dict[str, np.ndarray] = {}
-
-    # modality-specific first
-    for mod, path in manifest.alignment.items():
+    try:
+        tf = tifffile.TiffFile(path)
         try:
-            matrices[mod] = read_affine_matrix(path)
-            logger.info("Loaded alignment for %s from %s", mod, path.name)
-        except Exception as exc:
-            logger.warning("Failed to read alignment for %s: %s", mod, exc)
+            z = tf.aszarr()
+            logger.info("aszarr OK for %s (zarr-like)", path.name)
+            return z
+        finally:
+            tf.close()
+    except Exception as e_z:
+        logger.debug("aszarr failed for %s: %s", path.name, e_z)
 
-    # fallback: legacy matrix.csv applies to all modalities if present and no per-modality found
-    if manifest.matrix is not None and not matrices:
-        try:
-            matrices['global'] = read_affine_matrix(manifest.matrix)
-            logger.info("Loaded legacy matrix.csv as global alignment")
-        except Exception as exc:
-            logger.warning("Failed to read legacy matrix.csv: %s", exc)
-
-    # Note: keypoints are kept on manifest.keypoints (paths). Reading keypoints
-    # is done on demand via read_keypoints() when needed (viewer, recompute).
-    return matrices
-
-
-# ---------------------------------------------------------------------------
-# Xenium data
-# ---------------------------------------------------------------------------
-
-def load_cells(manifest: DatasetManifest) -> Optional[pd.DataFrame]:
-    """Load Xenium cell-level metadata."""
-    if manifest.cells is None:
-        logger.warning("cells.csv not found in manifest.")
-        return None
-    df = safe_read_csv(manifest.cells)
-    logger.info("Loaded cells.csv: %d cells, %d columns", len(df), df.shape[1])
-    return df
-
-
-def load_transcripts(
-    manifest: DatasetManifest,
-    columns: Optional[List[str]] = None,
-) -> Optional[pd.DataFrame]:
-    """Load Xenium transcript coordinates."""
-    if manifest.transcripts is None:
-        logger.warning("transcripts.parquet not found in manifest.")
-        return None
-    df = safe_read_parquet(manifest.transcripts, columns=columns)
-    logger.info("Loaded transcripts: %d rows", len(df))
-    return df
-
-
-def load_cell_boundaries(manifest: DatasetManifest) -> Optional[pd.DataFrame]:
-    """Load Xenium cell boundary polygons."""
-    if manifest.cell_boundaries is None:
-        logger.warning("cell_boundaries.parquet not found in manifest.")
-        return None
-    df = safe_read_parquet(manifest.cell_boundaries)
-    logger.info("Loaded cell boundaries: %d vertices", len(df))
-    return df
-
-
-def load_nucleus_boundaries(manifest: DatasetManifest) -> Optional[pd.DataFrame]:
-    """Load Xenium nucleus boundary polygons."""
-    if manifest.nucleus_boundaries is None:
-        logger.warning("nucleus_boundaries.parquet not found in manifest.")
-        return None
-    df = safe_read_parquet(manifest.nucleus_boundaries)
-    logger.info("Loaded nucleus boundaries: %d vertices", len(df))
-    return df
-
-
-# ---------------------------------------------------------------------------
-# Image loading (lazy / memory-mapped)
-# ---------------------------------------------------------------------------
-
-def load_he(manifest: DatasetManifest) -> Optional[tifffile.TiffFile]:
-    """Open the H&E TIFF as a memory-mapped file (lazy)."""
-    if manifest.he is None:
-        return None
-    tif = tifffile.TiffFile(manifest.he)
-    logger.info("Opened H&E TIFF (lazy): %s", manifest.he.name)
-    return tif
-
-
-def he_to_array(tif: tifffile.TiffFile) -> np.ndarray:
-    """Read the first series/page of a TiffFile into a numpy array."""
-    return tif.asarray()
-
-
-def he_to_memmap(manifest: DatasetManifest) -> Optional[np.ndarray]:
-    """Return a memory-mapped numpy view of the H&E image."""
-    if manifest.he is None:
-        return None
-    try:
-        arr = tifffile.memmap(manifest.he)
-        logger.info(
-            "Memory-mapped H&E: shape=%s dtype=%s", arr.shape, arr.dtype
-        )
-        return arr
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.warning(
-            "Could not memory-map H&E (%s); falling back to full read.", exc
-        )
-        return tifffile.imread(manifest.he)
-
-
-def load_comet_channel(
-    path: Path,
-    series: int = 0,
-    level: int = 0,
-) -> np.ndarray:
-    """Load a single COMET OME-TIFF channel as a memory-mapped array."""
-    try:
-        arr = tifffile.memmap(path, series=series, level=level)
-        arr = arr.squeeze()
-        logger.info(
-            "Loaded COMET channel %s: shape=%s dtype=%s",
-            path.stem, arr.shape, arr.dtype,
-        )
-        return arr
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.warning(
-            "memmap failed for %s (%s); falling back to imread.", path.name, exc
-        )
-        arr = tifffile.imread(path).squeeze()
-        return arr
-
-
-def get_comet_arrays(
-    manifest: DatasetManifest,
-) -> Dict[str, np.ndarray]:
-    """Return a dict of ``{marker_name: array}`` for all COMET channels."""
-    arrays = {}
-    for marker, path in manifest.comet.items():
-        arrays[marker] = load_comet_channel(path)
-    return arrays
-
-
-# ---------------------------------------------------------------------------
-# AnnData
-# ---------------------------------------------------------------------------
-
-def load_anndata(manifest: DatasetManifest) -> Optional["anndata.AnnData"]:
-    """Load the reference AnnData object (read-only)."""
-    if manifest.anndata is None:
-        logger.info("No .h5ad file found in manifest.")
-        return None
-
-    try:
-        import anndata
-    except ImportError as exc:
-        raise ImportError(
-            "anndata is required to load .h5ad files. "
-            "Install it with: conda install anndata"
-        ) from exc
-
-    adata = anndata.read_h5ad(manifest.anndata, backed="r")
-    logger.info(
-        "Loaded AnnData (backed, read-only): %d cells × %d vars",
-        adata.n_obs, adata.n_vars,
-    )
-    return adata
-
-
-# ---------------------------------------------------------------------------
-# Gene / protein list generation
-# ---------------------------------------------------------------------------
-
-def generate_gene_protein_lists(
-    manifest: DatasetManifest,
-    transcripts_df: Optional[pd.DataFrame] = None,
-    gene_col: str = "feature_name",
-    output_dir: Optional[Path] = None,
-) -> Tuple[List[str], List[str]]:
-    """Generate sorted gene and protein lists and write them to CSV."""
-    out_dir = Path(output_dir) if output_dir else manifest.folder
-
-    # ---- Genes ------------------------------------------------------------
-    if transcripts_df is None and manifest.transcripts is not None:
-        transcripts_df = safe_read_parquet(
-            manifest.transcripts, columns=[gene_col]
-        )
-
-    genes: List[str] = []
-    if transcripts_df is not None and gene_col in transcripts_df.columns:
-        genes = sorted(transcripts_df[gene_col].dropna().unique().tolist())
-        genes_csv = out_dir / "genes.csv"
-        pd.DataFrame({"gene": genes}).to_csv(genes_csv, index=False)
-        logger.info("Wrote %d genes to %s", len(genes), genes_csv)
-
-    # ---- Proteins ---------------------------------------------------------
-    proteins = sorted(manifest.comet.keys())
-    if proteins:
-        proteins_csv = out_dir / "proteins.csv"
-        pd.DataFrame({"protein": proteins}).to_csv(proteins_csv, index=False)
-        logger.info("Wrote %d proteins to %s", len(proteins), proteins_csv)
-
-    return genes, proteins
+    raise RuntimeError(f"Failed to load image {path.name} with memmap/imread/aszarr.")
 
 
 # ---------------------------------------------------------------------------
@@ -568,102 +227,267 @@ def generate_gene_protein_lists(
 # ---------------------------------------------------------------------------
 
 class DatasetLoader:
-    """High-level loader that wraps manifest detection and all lazy loaders.
-
-    Usage
-    -----
-    >>> loader = DatasetLoader("/path/to/dataset")
-    >>> loader.load()
-    >>> cells = loader.cells_df
-    >>> he    = loader.he_array
-
-    Attributes set after :meth:`load`
-    ----------------------------------
-    manifest : DatasetManifest
-    cells_df : pd.DataFrame | None
-    transcripts_df : pd.DataFrame | None
-    cell_boundaries_df : pd.DataFrame | None
-    nucleus_boundaries_df : pd.DataFrame | None
-    alignment_matrix : np.ndarray | None   # legacy single matrix
-    alignment_matrices : dict[str, np.ndarray]  # per-modality matrices
-    he_array : np.ndarray | None   (memory-mapped)
-    comet_arrays : dict[str, np.ndarray]
-    anndata_ref : anndata.AnnData | None
-    genes : list[str]
-    proteins : list[str]
-    """
+    """High-level loader for multi-core datasets."""
 
     def __init__(self, folder: Union[str, Path]) -> None:
         self.folder = Path(folder).resolve()
         self.manifest: Optional[DatasetManifest] = None
 
-        self.cells_df: Optional[pd.DataFrame] = None
-        self.transcripts_df: Optional[pd.DataFrame] = None
-        self.cell_boundaries_df: Optional[pd.DataFrame] = None
-        self.nucleus_boundaries_df: Optional[pd.DataFrame] = None
-        self.alignment_matrix: Optional[np.ndarray] = None  # legacy single matrix
-        self.alignment_matrices: Dict[str, np.ndarray] = {}  # per-modality
-        self.he_array: Optional[np.ndarray] = None
+        # Per-core data dictionaries
+        self.cells_df: Dict[str, pd.DataFrame] = {}
+        self.transcripts_df: Dict[str, pd.DataFrame] = {}
+        self.cell_boundaries_df: Dict[str, pd.DataFrame] = {}
+        self.nucleus_boundaries_df: Dict[str, pd.DataFrame] = {}
+        
+        self.alignment_matrices_comet: Dict[str, np.ndarray] = {}
+        self.alignment_matrices_he: Dict[str, np.ndarray] = {}
+        
+        self.he_arrays: Dict[str, np.ndarray] = {}
         self.comet_arrays: Dict[str, np.ndarray] = {}
-        self.anndata_ref = None
+        self.comet_markers: Dict[str, List[str]] = {}
+        self.comet_thresholds: Dict[str, Dict[str, Tuple[float, float]]] = {}
+        
+        self.anndata_refs: Dict[str, Any] = {}
 
+        # Lazy COMET handling: store paths and a small cache
+        self.comet_paths_by_core: Dict[str, Path] = {}
+        self._comet_cache: Dict[Tuple[str, int], Any] = {}  # (core_id, channel_index) -> array or zarr
+
+        # Global aggregations for UI menus
         self.genes: List[str] = []
         self.proteins: List[str] = []
 
-    # ------------------------------------------------------------------
-    def load(
-        self,
-        do_load_transcripts: bool = True,
-        load_boundaries: bool = True,
-        load_he: bool = True,
-        load_comet: bool = True,
-        load_adata: bool = True,
-    ) -> "DatasetLoader":
-        """Detect files and load all modalities."""
+    def load(self, do_load_transcripts: bool = True, load_boundaries: bool = True,
+             load_he: bool = True, load_comet: bool = True, load_adata: bool = True) -> "DatasetLoader":
+        
         self.manifest = detect_files(self.folder)
+        all_genes = set()
+        all_proteins = set()
 
-        # Always load cells (small file, used everywhere)
-        self.cells_df = load_cells(self.manifest)
+        for core_id, core in self.manifest.cores.items():
+            
+            # --- Xenium ---
+            if core.cells:
+                self.cells_df[core_id] = safe_read_csv(core.cells)
+            
+            # Always read feature_name metadata to populate gene list,
+            # but only keep full DataFrame if do_load_transcripts=True.
+            if core.transcripts:
+                try:
+                    df_tx_meta = safe_read_parquet(core.transcripts, columns=["feature_name"])
+                    if "feature_name" in df_tx_meta.columns:
+                        all_genes.update(df_tx_meta["feature_name"].dropna().unique().tolist())
+                    if do_load_transcripts:
+                        df_tx = safe_read_parquet(core.transcripts)
+                        self.transcripts_df[core_id] = df_tx
+                except Exception as e:
+                    logger.warning("Failed to read Xenium transcripts metadata for %s: %s", core_id, e)
+                    
+            if load_boundaries:
+                if core.cell_boundaries:
+                    self.cell_boundaries_df[core_id] = safe_read_parquet(core.cell_boundaries)
+                if core.nucleus_boundaries:
+                    self.nucleus_boundaries_df[core_id] = safe_read_parquet(core.nucleus_boundaries)
+                    
+            # --- Alignments ---
+            if core.alignment_comet:
+                try:
+                    M = read_affine_matrix(core.alignment_comet)
+                    self.alignment_matrices_comet[core_id] = normalize_affine_matrix(M)
+                except Exception as e:
+                    logger.warning("Failed to load COMET alignment for %s: %s", core_id, e)
+            
+            if core.alignment_he:
+                try:
+                    M = read_affine_matrix(core.alignment_he)
+                    self.alignment_matrices_he[core_id] = normalize_affine_matrix(M)
+                except Exception as e:
+                    logger.warning("Failed to load H&E alignment for %s: %s", core_id, e)
+            
+            # --- H&E Images (Lazy) ---
+            if load_he and core.he_file:
+                try:
+                    arr = load_image_robust(core.he_file)
+                    if isinstance(arr, zarr.hierarchy.Group):
+                        if "0" in arr:
+                            he5d = arr["0"]          # shape (T, C, Z, Y, X)
+                            he = he5d[0, :, 0, :, :]   # (3, Y, X)
+                            he = np.moveaxis(he, 0, -1)  # → (Y, X, 3)
+                            self.he_arrays[core_id] = he
+                        else:
+                            raise RuntimeError("H&E OME-Zarr missing channel 0")
+                    else:
+                        self.he_arrays[core_id] = arr
+                except Exception as e:
+                    logger.warning("Failed to load H&E for %s: %s", core_id, e)
+                        
+            # --- COMET (lazy) ---
+            if load_comet and core.comet_file:
+                self.comet_paths_by_core[core_id] = core.comet_file
 
-        if do_load_transcripts:
-            self.transcripts_df = load_transcripts(self.manifest)
+                markers: List[str] = []
+                thresholds: Dict[str, Tuple[float, float]] = {}
 
-        if load_boundaries:
-            self.cell_boundaries_df = load_cell_boundaries(self.manifest)
-            self.nucleus_boundaries_df = load_nucleus_boundaries(self.manifest)
+                # 1) thresholds CSV: row0=Channel, row1=Min, row2=Max
+                if core.comet_thresholds:
+                    try:
+                        tdf = safe_read_csv(core.comet_thresholds, header=None)
+                        if tdf.shape[0] >= 3:
+                            names_row = tdf.iloc[0].dropna()
+                            mins_row = tdf.iloc[1]
+                            maxs_row = tdf.iloc[2]
+                            for col_idx, name in names_row.items():
+                                name_str = str(name).strip()
+                                if not name_str or "Unnamed" in name_str:
+                                    continue
+                                name_str = html.unescape(name_str)
+                                if "#945;SMA" in name_str:
+                                    name_str = name_str.replace("#945;SMA", "αSMA")
+                                markers.append(name_str)
+                                try:
+                                    min_val = float(mins_row[col_idx])
+                                    max_val = float(maxs_row[col_idx])
+                                except Exception:
+                                    min_val, max_val = 0.0, 1000.0
+                                thresholds[name_str] = (min_val, max_val)
+                        else:
+                            logger.warning("comet_thresholding.csv for %s has unexpected shape %s",
+                                           core_id, tdf.shape)
+                    except Exception as e:
+                        logger.debug("Failed to read comet_thresholds for %s: %s", core_id, e)
 
-        # Load per-modality alignments (and fallback to legacy matrix.csv)
-        self.alignment_matrices = load_alignments(self.manifest)
-        # Keep legacy single matrix for backward compatibility
-        self.alignment_matrix = self.alignment_matrices.get('global', None)
+                # 2) OME-XML channel names override
+                try:
+                    from xml.etree import ElementTree as ET
+                    xml_path = core.comet_file / "OME" / "METADATA.ome.xml"
+                    if xml_path.exists():
+                        tree = ET.parse(xml_path)
+                        root_xml = tree.getroot()
+                        ns = {"ome": "http://www.openmicroscopy.org/Schemas/OME/2016-06"}
 
-        if load_he:
-            self.he_array = he_to_memmap(self.manifest)
+                        xml_markers: List[str] = []
+                        for ch in root_xml.findall(".//ome:Channel", ns):
+                            name = ch.get("Name")
+                            if name:
+                                name_str = html.unescape(name).strip()
+                                if "#945;SMA" in name_str:
+                                    name_str = name_str.replace("#945;SMA", "αSMA")
+                                xml_markers.append(name_str)
 
-        if load_comet:
-            self.comet_arrays = get_comet_arrays(self.manifest)
+                        if xml_markers:
+                            new_thresholds: Dict[str, Tuple[float, float]] = {}
+                            for m in xml_markers:
+                                if m in thresholds:
+                                    new_thresholds[m] = thresholds[m]
+                                else:
+                                    new_thresholds[m] = (0.0, 1000.0)
+                            markers = xml_markers
+                            thresholds = new_thresholds
+                except Exception as e:
+                    logger.warning("Failed to parse OME-XML for %s: %s", core_id, e)
 
-        if load_adata:
-            self.anndata_ref = load_anndata(self.manifest)
+                self.comet_markers[core_id] = markers
+                self.comet_thresholds[core_id] = thresholds
+                all_proteins.update(markers)
 
-        # Generate gene/protein lists (also writes CSVs)
-        self.genes, self.proteins = generate_gene_protein_lists(
-            self.manifest, transcripts_df=self.transcripts_df
+            # --- AnnData ---
+            if load_adata and core.anndata_file:
+                try:
+                    import anndata
+                    self.anndata_refs[core_id] = anndata.read_h5ad(core.anndata_file, backed="r")
+                except Exception as e:
+                    logger.warning("Failed to load AnnData for %s: %s", core_id, e)
+                    
+        # Filter genes to remove control/deprecated codewords
+        bad_prefixes = (
+            "DeprecatedCodeword",
+            "NegControlCodeword",
+            "UnassignedCodeword",
+            "NegControlProbe",
         )
+        self.genes = sorted(
+            g for g in all_genes
+            if isinstance(g, str) and not any(g.startswith(p) for p in bad_prefixes)
+        )
+        self.proteins = sorted(list(all_proteins))
+        
+        try:
+            if self.genes:
+                pd.DataFrame({"gene": self.genes}).to_csv(self.folder / "genes.csv", index=False)
+            if self.proteins:
+                pd.DataFrame({"protein": self.proteins}).to_csv(self.folder / "proteins.csv", index=False)
+        except Exception:
+            pass
 
         return self
+    
+    def get_comet_channel(self, core_id: str, channel_index: int = 0, use_cache: bool = True):
+        """Load a single COMET channel (by index) for a core on demand."""
+        key = (core_id, int(channel_index))
+        if use_cache and key in self._comet_cache:
+            return self._comet_cache[key]
 
-    # ------------------------------------------------------------------
+        path = self.comet_paths_by_core.get(core_id)
+        if path is None:
+            raise FileNotFoundError(f"No COMET file recorded for core {core_id}")
+
+        # OME-Zarr case
+        if path.is_dir() and (path.suffix == ".zarr" or path.suffixes == [".ome", ".zarr"]):
+            try:
+                root = zarr.open(path, mode="r")
+                if "0" not in root:
+                    raise RuntimeError(f"OME-Zarr {path} missing level 0")
+
+                level0 = root["0"]
+                # level0 may be an Array or a group with "0" as full-res
+                if isinstance(level0, zarr.core.Array):
+                    arr5d = level0[:]          # (T, C, Z, Y, X)
+                else:
+                    if "0" not in level0:
+                        raise RuntimeError(f"OME-Zarr {path}/0 missing full-res array")
+                    fullres = level0["0"]
+                    arr5d = fullres[:]         # (T, C, Z, Y, X)
+
+                arr2d = arr5d[0, channel_index, 0, :, :]  # (Y, X)
+
+                self._comet_cache[key] = arr2d
+                return arr2d
+
+            except Exception as exc:
+                logger.exception(
+                    "Failed to load COMET channel %s for core %s from OME-Zarr: %s",
+                    channel_index, core_id, exc
+                )
+                raise
+
+        # TIFF fallback
+        try:
+            tf = tifffile.TiffFile(path)
+            try:
+                arr_full = tf.asarray()
+                arr_full = np.asarray(arr_full)
+                if arr_full.ndim == 3:
+                    if arr_full.shape[0] <= 64 and arr_full.shape[0] < arr_full.shape[-1]:
+                        channel = arr_full[channel_index]
+                    else:
+                        channel = arr_full[..., channel_index]
+                elif arr_full.ndim == 4:
+                    channel = arr_full[0, channel_index]
+                else:
+                    channel = arr_full
+                self._comet_cache[key] = channel
+                return channel
+            finally:
+                tf.close()
+        except Exception as exc:
+            logger.exception("Failed to load COMET channel %s for core %s from TIFF: %s",
+                             channel_index, core_id, exc)
+            raise
+
     def __repr__(self) -> str:
         loaded = "loaded" if self.manifest else "not loaded"
         return (
             f"DatasetLoader(folder={self.folder}, status={loaded}, "
-            f"cells={len(self.cells_df) if self.cells_df is not None else 0}, "
+            f"cores={len(self.manifest.cores) if self.manifest else 0}, "
             f"genes={len(self.genes)}, proteins={len(self.proteins)})"
         )
-
-
-# alias to avoid shadowing the module-level function in DatasetLoader.load
-def load_transcripts_data(manifest: DatasetManifest) -> Optional[pd.DataFrame]:
-    """Alias for :func:`load_transcripts` used inside :class:`DatasetLoader`."""
-    return load_transcripts(manifest)
