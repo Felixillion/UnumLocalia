@@ -195,7 +195,7 @@ class TranscriptChannelRow(QWidget):
             self.color_btn.setStyleSheet(f"color: {self.color}; font-weight: bold; font-size: 16px;")
             # update existing layer color if present
             try:
-                layer = self.sv._get_layer(f"{self.sv.active_core}::tx::{self.gene}")
+                layer = self.sv._get_layer(f"{self.sv.active_core}::transcripts::{self.gene}")
                 if layer is not None:
                     try:
                         layer.properties["color"] = self.color
@@ -248,7 +248,7 @@ class TranscriptChannelRow(QWidget):
                     try:
                         lname = getattr(l, "name", "") or ""
                         meta = getattr(l, "metadata", {}) or {}
-                        if lname == name or meta.get("canonical_name") == name or f"::tx::{self.gene}" in lname:
+                        if lname == name or meta.get("canonical_name") == name or f"::transcripts::{self.gene}" in lname:
                             try:
                                 l.visible = False
                             except Exception:
@@ -291,7 +291,7 @@ class TranscriptChannelRow(QWidget):
         if not core:
             return
 
-        layer_name = f"{core}::tx::{self.gene}"
+        layer_name = f"{core}::transcripts::{self.gene}"
 
         # If unchecked: remove/hide existing layer
         if not self.vis_chk.isChecked():
@@ -327,69 +327,42 @@ class TranscriptChannelRow(QWidget):
             except Exception:
                 logger.debug("Affine transform failed for transcripts; using raw coords")
 
-        # IMPORTANT: Napari and most image viewers expect coordinates in (row, col) order
-        # i.e., (y, x). Our coords are (x, y) after reading and transforming, so swap columns.
-        try:
-            # coords shape (N,2) -> swap to (y, x)
-            coords = coords[:, [1, 0]]
-        except Exception:
-            pass
+        # IMPORTANT: Do NOT swap coords here. SpatialViewer.add_transcript_layer expects (x,y)
+        # and will convert to (row,col) internally. Passing already-swapped coords caused double-swap.
 
         # Remove any existing layer first to avoid duplicates
         self._remove_layer_by_name(layer_name)
 
-        # Add transcript layer with canonical name if possible and attach metadata so removal is reliable
-        added = False
+        # Add transcript layer using viewer API (viewer will convert coords to (row,col))
         created_layer = None
         try:
             try:
                 # Try name-first signature (some viewers accept name as first arg)
                 created_layer = self.sv.add_transcript_layer(layer_name, coords, color=self.color, visible=True)
-                added = True
             except TypeError:
-                # Fallback to (core, gene, coords, ...) then try to rename created layer
+                # Fallback to (core, gene, coords, ...) — viewer will name the layer as "{core}::transcripts::{gene}"
                 created_layer = self.sv.add_transcript_layer(core, self.gene, coords, color=self.color, visible=True)
-                added = True
         except Exception as e:
             logger.exception("Failed to add transcript layer for %s / %s: %s", core, self.gene, e)
             return
 
-        # Try to canonicalize the layer name and attach metadata so removal can find it reliably
+        # Ensure the created layer is discoverable: set canonical metadata if possible
         try:
-            # If add_transcript_layer returned a layer object, set its name/metadata
             if created_layer is not None:
                 try:
-                    # Napari Points layers accept .name
                     created_layer.name = layer_name
                 except Exception:
                     pass
                 try:
                     created_layer.metadata = getattr(created_layer, "metadata", {}) or {}
                     created_layer.metadata["canonical_name"] = layer_name
-                    created_layer.metadata["sb_source"] = f"tx::{self.gene}"
-                except Exception:
-                    pass
-            else:
-                # If no object returned, try to find the layer by likely names and tag it
-                try:
-                    cand = self.sv._get_layer(layer_name) or self.sv._get_layer(self.gene) or self.sv._get_layer(f"{core}::{self.gene}")
-                    if cand is not None:
-                        try:
-                            cand.name = layer_name
-                        except Exception:
-                            pass
-                        try:
-                            cand.metadata = getattr(cand, "metadata", {}) or {}
-                            cand.metadata["canonical_name"] = layer_name
-                            cand.metadata["sb_source"] = f"tx::{self.gene}"
-                        except Exception:
-                            pass
+                    created_layer.metadata["sb_source"] = f"transcripts::{self.gene}"
                 except Exception:
                     pass
         except Exception:
             pass
 
-        # Immediately apply global dot size (prefer viewer stored value, else 25)
+        # Apply global dot size (prefer viewer stored value, else 25)
         size_val = 25.0
         try:
             if hasattr(self.sv, "_transcript_size"):
@@ -401,53 +374,43 @@ class TranscriptChannelRow(QWidget):
         except Exception:
             size_val = 25.0
 
+        # Use the viewer's update API to set color and size reliably
         try:
-            if hasattr(self.sv, "set_transcript_size"):
-                self.sv.set_transcript_size(size_val)
-        except Exception:
-            pass
-
-        # Set size and color on the actual layer object if we can find it
-        try:
-            layer = None
+            # viewer.update_transcript_layer expects gene and optional core, color, size, visible
             try:
-                layer = self.sv._get_layer(layer_name)
+                self.sv.update_transcript_layer(self.gene, core=core, color=self.color, size=size_val, visible=True)
             except Exception:
-                layer = None
-            if layer is None and hasattr(self.sv, "viewer") and hasattr(self.sv.viewer, "layers"):
-                for l in self.sv.viewer.layers:
-                    try:
-                        lname = getattr(l, "name", "") or ""
-                        if lname == layer_name or (hasattr(l, "metadata") and l.metadata.get("canonical_name") == layer_name) or f"::tx::{self.gene}" in lname:
-                            layer = l
-                            break
-                    except Exception:
-                        pass
-
-            if layer is not None:
-                # size
+                # fallback: try by core/gene ordering if viewer expects that
                 try:
-                    layer.properties["size"] = size_val
+                    self.sv.update_transcript_layer(self.gene, color=self.color, size=size_val, visible=True)
                 except Exception:
+                    # final fallback: set properties directly on the layer object if we can find it
+                    layer = None
                     try:
-                        layer.size = size_val
+                        layer = self.sv._get_layer(layer_name)
                     except Exception:
+                        layer = None
+                    if layer is None and hasattr(self.sv, "viewer") and hasattr(self.sv.viewer, "layers"):
+                        for l in self.sv.viewer.layers:
+                            try:
+                                if getattr(l, "name", "") == layer_name or (hasattr(l, "metadata") and l.metadata.get("canonical_name") == layer_name):
+                                    layer = l
+                                    break
+                            except Exception:
+                                pass
+                    if layer is not None:
                         try:
-                            layer.metadata["size"] = size_val
-                        except Exception:
-                            pass
-                # color: try common properties for Napari Points
-                try:
-                    layer.properties["color"] = self.color
-                except Exception:
-                    try:
-                        layer.face_color = self.color
-                    except Exception:
-                        try:
-                            layer.color = self.color
+                            layer.face_color = self.color
                         except Exception:
                             try:
-                                layer.metadata["color"] = self.color
+                                layer.properties["color"] = self.color
+                            except Exception:
+                                pass
+                        try:
+                            layer.size = size_val
+                        except Exception:
+                            try:
+                                layer.properties["size"] = size_val
                             except Exception:
                                 pass
         except Exception:
@@ -464,6 +427,7 @@ class TranscriptChannelRow(QWidget):
                 self.sv.reset_view()
         except Exception:
             pass
+
 
 
 class DataTab(QWidget):
