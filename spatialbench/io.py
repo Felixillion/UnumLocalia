@@ -1,14 +1,6 @@
+# spatialbench/io.py
 """
-spatialbench.io
-===============
 Dataset discovery, manifest building, and lazy data loading for multi-core datasets.
-
-Philosophy
-----------
-* Uses `dataset_manifest.csv` to map out per-core files.
-* Use memory-mapped access for large TIFF files (OME-TIFF, H&E) so that only
-  the requested tiles are read into RAM.
-* Never modify any file on disk.
 """
 
 from __future__ import annotations
@@ -23,6 +15,10 @@ import numpy as np
 import pandas as pd
 import tifffile
 import zarr
+import json
+
+from shapely.geometry import shape, Polygon
+from shapely.validation import make_valid
 
 from spatialbench.utils import safe_read_csv, safe_read_parquet
 
@@ -38,13 +34,13 @@ class CoreManifest:
     """Paths to all detected files for a single core."""
     core_id: str
     core_folder: Path
-    
+
     comet_file: Optional[Path] = None
     comet_thresholds: Optional[Path] = None
     he_file: Optional[Path] = None
     anndata_file: Optional[Path] = None
     xenium_folder: Optional[Path] = None
-    
+
     alignment_comet: Optional[Path] = None
     alignment_he: Optional[Path] = None
 
@@ -53,6 +49,9 @@ class CoreManifest:
     cell_boundaries: Optional[Path] = None
     nucleus_boundaries: Optional[Path] = None
     transcripts: Optional[Path] = None
+
+    # Optional manifest-provided GeoJSON path (relative or absolute)
+    xenium_geojson_comet: Optional[str] = None
 
 
 @dataclass
@@ -82,7 +81,7 @@ def detect_files(folder: Path) -> DatasetManifest:
     """Reads dataset_manifest.csv in folder and builds DatasetManifest."""
     folder = Path(folder).resolve()
     manifest_csv = folder / "dataset_manifest.csv"
-    
+
     if not manifest_csv.exists():
         raise FileNotFoundError(f"dataset_manifest.csv not found in {folder}")
 
@@ -92,13 +91,13 @@ def detect_files(folder: Path) -> DatasetManifest:
     for _, row in df.iterrows():
         if pd.isna(row.get('core_id')):
             continue
-            
+
         cid = str(row['core_id'])
-        
+
         # Resolve core folder if it exists
         core_folder_str = str(row.get('core_folder', ''))
         cf = folder / core_folder_str if core_folder_str else folder
-        
+
         core = CoreManifest(core_id=cid, core_folder=cf)
 
         if 'comet_file' in row and pd.notna(row['comet_file']):
@@ -109,7 +108,7 @@ def detect_files(folder: Path) -> DatasetManifest:
 
         if 'he_file' in row and pd.notna(row['he_file']):
             core.he_file = (folder / str(row['he_file'])).resolve()
-        
+
         if 'anndata_file' in row and pd.notna(row['anndata_file']):
             core.anndata_file = (folder / str(row['anndata_file'])).resolve()
 
@@ -118,25 +117,29 @@ def detect_files(folder: Path) -> DatasetManifest:
 
         if 'alignment_he' in row and pd.notna(row['alignment_he']):
             core.alignment_he = (folder / str(row['alignment_he'])).resolve()
-        
+
         if 'xenium_folder' in row and pd.notna(row['xenium_folder']):
             xf = (folder / str(row['xenium_folder'])).resolve()
             core.xenium_folder = xf
             # Automatically find the canonical Xenium files inside this folder
             cells = xf / "cells.csv"
             if cells.exists(): core.cells = cells
-            
+
             cb = xf / "cell_boundaries.parquet"
             if cb.exists(): core.cell_boundaries = cb
-            
+
             nb = xf / "nucleus_boundaries.parquet"
             if nb.exists(): core.nucleus_boundaries = nb
-            
+
             tx = xf / "transcripts.parquet"
             if tx.exists(): core.transcripts = tx
-            
+
+        # Optional GeoJSON path column in manifest
+        if 'xenium_geojson_comet' in row and pd.notna(row['xenium_geojson_comet']):
+            core.xenium_geojson_comet = str(row['xenium_geojson_comet'])
+
         manifest.cores[cid] = core
-    
+
     logger.info("Dataset manifest built:\n%s", manifest.summary())
     return manifest
 
@@ -161,6 +164,7 @@ def read_affine_matrix(path: Path) -> np.ndarray:
         return raw.reshape(3, 3)
     raise ValueError(f"Expected 2x3 or 3x3 matrix in {path}, got {raw.shape}")
 
+
 def normalize_affine_matrix(M: np.ndarray) -> np.ndarray:
     """Zero out translation so all cores start at same origin while preserving homogeneous row."""
     M = np.asarray(M, dtype=np.float64).copy()
@@ -178,6 +182,31 @@ def normalize_affine_matrix(M: np.ndarray) -> np.ndarray:
     if M.ndim == 2 and M.shape[1] >= 3:
         M[:, 2] = 0.0
     return M
+
+
+def _compute_centering_scale_correction(M: np.ndarray, pts_mapped: np.ndarray, img_w: int, img_h: int, target_fraction: float = 0.9) -> np.ndarray:
+    """
+    Compute a conservative uniform scale + translation correction in image pixel space
+    that centers the mapped points and scales them to occupy `target_fraction` of the image max dimension.
+    Returns a 3x3 correction matrix C such that M_corrected = C @ M.
+    """
+    mn = pts_mapped.min(axis=0)
+    mx = pts_mapped.max(axis=0)
+    rng = mx - mn
+    coord_max_dim = max(rng[0], rng[1], 1.0)
+    img_max_dim = max(img_w, img_h, 1.0)
+    s = (img_max_dim * target_fraction) / coord_max_dim
+
+    center_pts = pts_mapped.mean(axis=0)
+    center_img = np.array([img_w / 2.0, img_h / 2.0])
+
+    # translate cloud to origin, scale, translate to image center
+    T1 = np.array([[1, 0, -center_pts[0]], [0, 1, -center_pts[1]], [0, 0, 1]], dtype=float)
+    S = np.array([[s, 0, 0], [0, s, 0], [0, 0, 1]], dtype=float)
+    T2 = np.array([[1, 0, center_img[0]], [0, 1, center_img[1]], [0, 0, 1]], dtype=float)
+
+    C = T2 @ S @ T1
+    return C
 
 
 # -------------------------
@@ -249,7 +278,7 @@ class DatasetLoader:
         self.transcripts_df: Dict[str, pd.DataFrame] = {}
         self.cell_boundaries_df: Dict[str, pd.DataFrame] = {}
         self.nucleus_boundaries_df: Dict[str, pd.DataFrame] = {}
-        
+
         # Alignment
         self.alignment_matrices_comet: Dict[str, np.ndarray] = {}
         self.alignment_matrices_he: Dict[str, np.ndarray] = {}
@@ -260,7 +289,7 @@ class DatasetLoader:
         self.comet_arrays: Dict[str, np.ndarray] = {}
         self.comet_markers: Dict[str, List[str]] = {}
         self.comet_thresholds: Dict[str, Dict[str, Tuple[float, float]]] = {}
-        
+
         self.anndata_refs: Dict[str, Any] = {}
 
         # Lazy COMET handling: store paths and a small cache
@@ -271,19 +300,25 @@ class DatasetLoader:
         self.genes: List[str] = []
         self.proteins: List[str] = []
 
+        # store chosen affine to map transcript (x,y) in microns -> image (x,y) pixels
+        # Keys: core_id -> 3x3 numpy array mapping Xenium µm -> COMET pixels
+        self.transcript_affine_by_core: Dict[str, np.ndarray] = {}
+        # xenium pixel size in microns (set from manifest or OME-XML if available)
+        self.xenium_pixel_size_um: Optional[float] = None
+
     def load(self, do_load_transcripts: bool = True, load_boundaries: bool = True,
              load_he: bool = True, load_comet: bool = True, load_adata: bool = True) -> "DatasetLoader":
-        
+
         self.manifest = detect_files(self.folder)
         all_genes = set()
         all_proteins = set()
 
         for core_id, core in self.manifest.cores.items():
-            
+
             # --- Xenium ---
             if core.cells:
                 self.cells_df[core_id] = safe_read_csv(core.cells)
-            
+
             # Always read feature_name metadata to populate gene list,
             # but only keep full DataFrame if do_load_transcripts=True.
             if core.transcripts:
@@ -296,13 +331,13 @@ class DatasetLoader:
                         self.transcripts_df[core_id] = df_tx
                 except Exception as e:
                     logger.warning("Failed to read Xenium transcripts metadata for %s: %s", core_id, e)
-                    
+
             if load_boundaries:
                 if core.cell_boundaries:
                     self.cell_boundaries_df[core_id] = safe_read_parquet(core.cell_boundaries)
                 if core.nucleus_boundaries:
                     self.nucleus_boundaries_df[core_id] = safe_read_parquet(core.nucleus_boundaries)
-                    
+
             # --- Alignments ---
             # COMET alignment
             if core.alignment_comet:
@@ -313,7 +348,7 @@ class DatasetLoader:
                     self.alignment_matrices_comet[core_id] = normalize_affine_matrix(M_raw)
                 except Exception as e:
                     logger.warning("Failed to load COMET alignment for %s: %s", core_id, e)
-            
+
             # H&E alignment
             if core.alignment_he:
                 try:
@@ -322,7 +357,7 @@ class DatasetLoader:
                     self.alignment_matrices_he[core_id] = normalize_affine_matrix(M_raw)
                 except Exception as e:
                     logger.warning("Failed to load H&E alignment for %s: %s", core_id, e)
-            
+
             # --- H&E Images (Lazy) ---
             if load_he and core.he_file:
                 try:
@@ -339,7 +374,7 @@ class DatasetLoader:
                         self.he_arrays[core_id] = arr
                 except Exception as e:
                     logger.warning("Failed to load H&E for %s: %s", core_id, e)
-                        
+
             # --- COMET (lazy) ---
             if load_comet and core.comet_file:
                 self.comet_paths_by_core[core_id] = core.comet_file
@@ -402,6 +437,21 @@ class DatasetLoader:
                                     new_thresholds[m] = (0.0, 1000.0)
                             markers = xml_markers
                             thresholds = new_thresholds
+
+                        # Try to read PhysicalSizeX/Y from OME-XML if present (useful for Xenium pixel size)
+                        try:
+                            phys_x = root_xml.find(".//ome:Pixels", ns).get("PhysicalSizeX")
+                            if phys_x:
+                                # PhysicalSizeX in microns per pixel for this image
+                                try:
+                                    px_um = float(phys_x)
+                                    # Only set if not already set by user
+                                    if self.xenium_pixel_size_um is None:
+                                        self.xenium_pixel_size_um = px_um
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
                 except Exception as e:
                     logger.warning("Failed to parse OME-XML for %s: %s", core_id, e)
 
@@ -416,7 +466,15 @@ class DatasetLoader:
                     self.anndata_refs[core_id] = anndata.read_h5ad(core.anndata_file, backed="r")
                 except Exception as e:
                     logger.warning("Failed to load AnnData for %s: %s", core_id, e)
-                    
+
+            # --- Attempt to fit transcript affine from GeoJSON + Xenium boundaries ---
+            # This is done after boundaries and transcripts are loaded for the core.
+            try:
+                self._fit_affine_from_geojson_and_xenium(core_id, core)
+            except Exception:
+                # don't fail loading if fitting fails
+                logger.debug("GeoJSON affine fit skipped or failed for core %s", core_id)
+
         # Filter genes to remove control/deprecated codewords
         bad_prefixes = (
             "DeprecatedCodeword",
@@ -429,7 +487,7 @@ class DatasetLoader:
             if isinstance(g, str) and not any(g.startswith(p) for p in bad_prefixes)
         )
         self.proteins = sorted(list(all_proteins))
-        
+
         try:
             if self.genes:
                 pd.DataFrame({"gene": self.genes}).to_csv(self.folder / "genes.csv", index=False)
@@ -439,7 +497,113 @@ class DatasetLoader:
             pass
 
         return self
-    
+
+    def _fit_affine_from_geojson_and_xenium(self, core_id: str, core_manifest: CoreManifest) -> None:
+        """
+        If a GeoJSON of COMET-space cell polygons exists, fit a 3x3 affine A mapping
+        Xenium cell centroids (µm) -> COMET pixel centroids and store in self.transcript_affine_by_core.
+        """
+        # locate geojson: prefer manifest column, else xenium_folder/cell_boundaries_comet_space.geojson
+        gj_path: Optional[Path] = None
+        if core_manifest.xenium_geojson_comet:
+            candidate = Path(core_manifest.xenium_geojson_comet)
+            if not candidate.is_absolute():
+                candidate = self.folder / candidate
+            if candidate.exists():
+                gj_path = candidate
+        elif core_manifest.xenium_folder:
+            candidate = core_manifest.xenium_folder / "cell_boundaries_comet_space.geojson"
+            if candidate.exists():
+                gj_path = candidate
+
+        if gj_path is None or not gj_path.exists():
+            return
+
+        # load xenium cell centroids (µm)
+        try:
+            df_x = self.cell_boundaries_df.get(core_id)
+            if df_x is None or df_x.empty:
+                return
+            cent_x: Dict[str, Tuple[float, float]] = {}
+            for cid, group in df_x.groupby("cell_id"):
+                xs = group["vertex_x"].to_numpy(dtype=float)
+                ys = group["vertex_y"].to_numpy(dtype=float)
+                if len(xs) < 3:
+                    continue
+                poly = Polygon(np.column_stack([xs, ys]))
+                if not poly.is_valid:
+                    poly = make_valid(poly)
+                    if poly.geom_type == "MultiPolygon":
+                        poly = max(poly.geoms, key=lambda p: p.area)
+                if poly.is_valid and poly.area > 0:
+                    c = poly.centroid
+                    cent_x[str(cid)] = (c.x, c.y)
+        except Exception:
+            logger.debug("Failed to compute Xenium centroids for core %s", core_id)
+            return
+
+        # load geojson centroids (COMET pixels)
+        try:
+            with open(gj_path, "r") as f:
+                gj = json.load(f)
+        except Exception:
+            logger.debug("Failed to read GeoJSON %s for core %s", gj_path, core_id)
+            return
+
+        cent_c: Dict[str, Tuple[float, float]] = {}
+        for feat in gj.get("features", []):
+            props = feat.get("properties", {})
+            cid = str(props.get("cell_id") or props.get("name"))
+            geom = feat.get("geometry")
+            if geom is None:
+                continue
+            poly = shape(geom)
+            if not poly.is_valid:
+                poly = make_valid(poly)
+                if poly.geom_type == "MultiPolygon":
+                    poly = max(poly.geoms, key=lambda p: p.area)
+            if poly.is_valid and poly.area > 0:
+                c = poly.centroid
+                cent_c[cid] = (c.x, c.y)
+
+        # build matched arrays
+        src = []
+        dst = []
+        for cid, s in cent_x.items():
+            if cid in cent_c:
+                src.append(s)      # Xenium µm
+                dst.append(cent_c[cid])  # COMET pixels
+
+        if len(src) < 6:
+            # not enough matches for a stable fit
+            logger.debug("Not enough centroid matches for core %s (found=%d)", core_id, len(src))
+            return
+
+        src = np.array(src, dtype=float)
+        dst = np.array(dst, dtype=float)
+
+        # fit affine (least squares)
+        N = src.shape[0]
+        X = np.zeros((2*N, 6), dtype=float)
+        y = np.zeros((2*N,), dtype=float)
+        for i in range(N):
+            x0, y0 = src[i,0], src[i,1]
+            u, v = dst[i,0], dst[i,1]
+            X[2*i]   = [x0, y0, 1, 0, 0, 0]
+            X[2*i+1] = [0, 0, 0, x0, y0, 1]
+            y[2*i]   = u
+            y[2*i+1] = v
+        params, *_ = np.linalg.lstsq(X, y, rcond=None)
+        A = np.array([[params[0], params[1], params[2]],
+                      [params[3], params[4], params[5]],
+                      [0.0,       0.0,       1.0]])
+        # store and log residual
+        H = np.hstack([src, np.ones((src.shape[0],1))])
+        mapped = (H @ A.T)[:, :2]
+        rms = np.sqrt(((mapped - dst)**2).sum(axis=1)).mean()
+        self.transcript_affine_by_core[core_id] = A
+        logger.info("Fitted transcript affine for %s from GeoJSON (matches=%d, rms=%.2f px)", core_id, len(src), rms)
+
     def get_comet_channel(self, core_id: str, channel_index: int = 0, use_cache: bool = True):
         """Load a single COMET channel (by index) for a core on demand."""
         key = (core_id, int(channel_index))
