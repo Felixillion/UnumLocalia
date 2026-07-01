@@ -70,6 +70,130 @@ class CollapsibleGroup(QGroupBox):
                 child.setVisible(checked)
 
 
+# ---------- Cell mask class ----------
+class CellMaskRow(QWidget):
+    """
+    Minimal cell-mask control: checkbox + info label.
+    Loads rasterized mask synchronously via loader.load_geojson_mask(core).
+    """
+
+    def __init__(self, sv, loader, parent=None):
+        super().__init__(parent)
+        self.sv = sv
+        self.loader = loader
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 2, 0, 2)
+        row.setSpacing(6)
+
+        self.chk = QCheckBox("Cell masks")
+        self.chk.setChecked(False)
+        self.chk.toggled.connect(self._on_toggle)
+        row.addWidget(self.chk)
+
+        self.info_lbl = QLabel("")
+        self.info_lbl.setStyleSheet("color: gray;")
+        row.addWidget(self.info_lbl)
+
+        row.addStretch()
+        self.setLayout(row)
+
+    def sync_to_core(self, core: str):
+        """Update checkbox state when core changes."""
+        if not core:
+            self.chk.setEnabled(False)
+            self.info_lbl.setText("")
+            return
+
+        self.chk.setEnabled(True)
+        lname = f"{core}::cell_mask"
+        layer = None
+        try:
+            layer = self.sv.viewer.layers.get(lname)
+        except Exception:
+            layer = None
+
+        if layer is not None:
+            self.chk.blockSignals(True)
+            self.chk.setChecked(bool(layer.visible))
+            self.chk.blockSignals(False)
+            meta = getattr(layer, "metadata", {}) or {}
+            nlabels = meta.get("n_labels")
+            if nlabels is not None:
+                self.info_lbl.setText(f"labels: {nlabels}")
+            else:
+                self.info_lbl.setText("")
+        else:
+            self.chk.blockSignals(True)
+            self.chk.setChecked(False)
+            self.chk.blockSignals(False)
+            self.info_lbl.setText("")
+
+    def _on_toggle(self, checked: bool):
+        core = getattr(self.sv, "active_core", None)
+        if not core:
+            return
+
+        lname = f"{core}::cell_mask"
+
+        # turning off: hide if present
+        if not checked:
+            try:
+                layer = self.sv.viewer.layers.get(lname)
+            except Exception:
+                layer = None
+            if layer is not None:
+                try:
+                    layer.visible = False
+                except Exception:
+                    pass
+            return
+
+        # turning on: load mask and add labels layer
+        try:
+            self.info_lbl.setText("loading masks...")
+            QApplication.processEvents()
+        except Exception:
+            pass
+
+        try:
+            mask, id_map = self.loader.load_geojson_mask(core, overwrite=False)
+        except Exception as e:
+            logger.exception("Failed to load geojson mask for %s: %s", core, e)
+            self.chk.blockSignals(True)
+            self.chk.setChecked(False)
+            self.chk.blockSignals(False)
+            self.info_lbl.setText("mask load failed")
+            return
+
+        if mask is None:
+            self.info_lbl.setText("no mask")
+            self.chk.blockSignals(True)
+            self.chk.setChecked(False)
+            self.chk.blockSignals(False)
+            return
+
+        try:
+            # add labels layer (use viewer helper if available)
+            try:
+                lbl_layer = self.sv.add_label_layer(core=core, labels=mask, name=lname, visible=True)
+            except Exception:
+                lbl_layer = self.sv.viewer.add_labels(mask, name=lname, visible=True)
+            lbl_layer.metadata = getattr(lbl_layer, "metadata", {}) or {}
+            lbl_layer.metadata["core"] = core
+            lbl_layer.metadata["modality"] = "cell_mask"
+            lbl_layer.metadata["sb_source"] = "geojson_mask"
+            lbl_layer.metadata["label_to_cell_id"] = id_map
+            lbl_layer.metadata["n_labels"] = int(len(id_map)) if id_map is not None else 0
+            self.info_lbl.setText(f"labels: {lbl_layer.metadata.get('n_labels', 0)}")
+        except Exception as e:
+            logger.exception("Failed to add labels layer for %s: %s", core, e)
+            self.chk.blockSignals(True)
+            self.chk.setChecked(False)
+            self.chk.blockSignals(False)
+            self.info_lbl.setText("add failed")
+
+
 class CometChannelRow(QWidget):
     """Row controls for a single COMET marker across all cores."""
 
@@ -681,6 +805,10 @@ class LayersTab(QWidget):
                 self.gene_rows.append(row)
                 self.scroll_layout.addWidget(row)
 
+        # Add Cell Mask control row (single global row that operates on active core)
+        self.mask_row = CellMaskRow(self.sv, loader)
+        self.scroll_layout.addWidget(self.mask_row)
+
         self.scroll_layout.addStretch()
 
         # Add everything to viewer
@@ -865,17 +993,44 @@ class LayersTab(QWidget):
                     self.sv.add_boundary_layer(core_id, shapes, name="cells", color="white", visible=False)
 
     def _on_core_swapped(self, core: str):
-        if not core:
-            return
-        # remove transcript layers from previous core(s) so they don't persist
+        """Called when the active core selection changes."""
         try:
-            self._remove_all_transcript_layers()
+            # update viewer state via sv helper if available
+            try:
+                self.sv.set_active_core(core)
+            except Exception:
+                pass
         except Exception:
             pass
-        self.sv.set_active_core(core)
-        for row in self.comet_rows:
-            row.sync_to_core(core)
-        self._update_he()
+
+        # sync comet rows and gene rows if present
+        try:
+            for r in self.comet_rows:
+                try:
+                    r.sync_to_core(core)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        try:
+            for r in self.gene_rows:
+                try:
+                    r.sync_to_core(core)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # sync mask row
+        try:
+            if getattr(self, "mask_row", None) is not None:
+                try:
+                    self.mask_row.sync_to_core(core)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _update_he(self):
         core = self.core_combo.currentText()
