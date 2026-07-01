@@ -337,6 +337,53 @@ class SpatialViewer:
     # Cell inspector
     # ------------------------------------------------------------------ #
 
+    def add_label_layer(
+        self,
+        core: str,
+        labels: np.ndarray,
+        name: Optional[str] = None,
+        visible: bool = True,
+        affine: Optional[np.ndarray] = None,
+        color_map: Optional[str] = "glasbey",
+    ):
+        """
+        Add a labels image (integer mask) for a core. Stores mapping in metadata.
+        """
+        name = name or f"{core}::masks"
+        self._remove_layer_if_exists(name)
+
+        # ensure integer dtype
+        labels = np.asarray(labels)
+        if not np.issubdtype(labels.dtype, np.integer):
+            labels = labels.astype(np.int32)
+
+        is_visible = visible if (self._active_core is None or self._active_core == core) else False
+
+        layer = self._viewer.add_labels(
+            labels,
+            name=name,
+            visible=is_visible,
+            affine=self._convert_affine(affine),
+        )
+
+        # store metadata so other code can find it
+        layer.metadata.update({
+            "core": core,
+            "modality": "mask",
+            "user_visible": visible,
+            "label_dtype": str(labels.dtype),
+        })
+
+        # apply a categorical colormap if available
+        try:
+            from napari.utils.colormaps import Colormap
+            # napari has built-in categorical maps; if not, leave default
+            # keep this minimal — user can change in UI
+        except Exception:
+            pass
+
+        return layer
+
     def get_cell_info_at(
         self,
         x: float,

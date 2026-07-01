@@ -1,6 +1,10 @@
 # spatialbench/io.py
 """
 Dataset discovery, manifest building, and lazy data loading for multi-core datasets.
+
+This version includes robust zarr handling and helpers to rasterize GeoJSON cell
+polygons into per-core label masks, compute per-cell COMET statistics, and assign
+transcripts to cells using the mask.
 """
 
 from __future__ import annotations
@@ -21,6 +25,9 @@ from shapely.geometry import shape, Polygon
 from shapely.validation import make_valid
 
 from spatialbench.utils import safe_read_csv, safe_read_parquet
+
+# PIL for rasterization
+from PIL import Image, ImageDraw
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +223,7 @@ def load_image_robust(path: Path):
     """Try to load an image robustly. Return numpy array or zarr-like array.
 
     For .ome.zarr folders:
-      - open with zarr and return the full-res level 0 group.
+      - open with zarr and return the full-res level 0 group or array.
 
     For TIFF:
       - try memmap, then imread, then aszarr.
@@ -306,6 +313,11 @@ class DatasetLoader:
         # xenium pixel size in microns (set from manifest or OME-XML if available)
         self.xenium_pixel_size_um: Optional[float] = None
 
+        # cell masks
+        self.cell_mask_by_core: Dict[str, np.ndarray] = {}
+        self.cell_label_to_id_by_core: Dict[str, Dict[int, str]] = {}
+        self.comet_cell_stats: Dict[str, Any] = {}
+
     def load(self, do_load_transcripts: bool = True, load_boundaries: bool = True,
              load_he: bool = True, load_comet: bool = True, load_adata: bool = True) -> "DatasetLoader":
 
@@ -362,16 +374,19 @@ class DatasetLoader:
             if load_he and core.he_file:
                 try:
                     arr = load_image_robust(core.he_file)
-                    if isinstance(arr, zarr.hierarchy.Group):
-                        if "0" in arr:
-                            he5d = arr["0"]          # shape (T, C, Z, Y, X)
-                            he = he5d[0, :, 0, :, :]   # (3, Y, X)
-                            he = np.moveaxis(he, 0, -1)  # → (Y, X, 3)
+                    # robust check for zarr group/array
+                    try:
+                        # prefer duck-typing: if object has keys() and '0' in it, treat as group
+                        if hasattr(arr, "keys") and "0" in arr:
+                            he5d = arr["0"]
+                            # he5d expected shape (T, C, Z, Y, X)
+                            he = he5d[0, :, 0, :, :]   # (C, Y, X)
+                            he = np.moveaxis(he, 0, -1)  # → (Y, X, C)
                             self.he_arrays[core_id] = he
                         else:
-                            raise RuntimeError("H&E OME-Zarr missing channel 0")
-                    else:
-                        self.he_arrays[core_id] = arr
+                            self.he_arrays[core_id] = np.asarray(arr)
+                    except Exception:
+                        self.he_arrays[core_id] = np.asarray(arr)
                 except Exception as e:
                     logger.warning("Failed to load H&E for %s: %s", core_id, e)
 
@@ -440,16 +455,17 @@ class DatasetLoader:
 
                         # Try to read PhysicalSizeX/Y from OME-XML if present (useful for Xenium pixel size)
                         try:
-                            phys_x = root_xml.find(".//ome:Pixels", ns).get("PhysicalSizeX")
-                            if phys_x:
-                                # PhysicalSizeX in microns per pixel for this image
-                                try:
-                                    px_um = float(phys_x)
-                                    # Only set if not already set by user
-                                    if self.xenium_pixel_size_um is None:
-                                        self.xenium_pixel_size_um = px_um
-                                except Exception:
-                                    pass
+                            pix_node = root_xml.find(".//ome:Pixels", ns)
+                            if pix_node is not None:
+                                phys_x = pix_node.get("PhysicalSizeX")
+                                if phys_x:
+                                    try:
+                                        px_um = float(phys_x)
+                                        if self.xenium_pixel_size_um is None:
+                                            self.xenium_pixel_size_um = px_um
+                                        logger.info("Found PhysicalSizeX in OME-XML (µm): %s", phys_x)
+                                    except Exception:
+                                        pass
                         except Exception:
                             pass
                 except Exception as e:
@@ -481,6 +497,7 @@ class DatasetLoader:
             "NegControlCodeword",
             "UnassignedCodeword",
             "NegControlProbe",
+            "Intergenic"
         )
         self.genes = sorted(
             g for g in all_genes
@@ -604,6 +621,9 @@ class DatasetLoader:
         self.transcript_affine_by_core[core_id] = A
         logger.info("Fitted transcript affine for %s from GeoJSON (matches=%d, rms=%.2f px)", core_id, len(src), rms)
 
+    # -----------------------
+    # Robust COMET channel loader (handles zarr versions)
+    # -----------------------
     def get_comet_channel(self, core_id: str, channel_index: int = 0, use_cache: bool = True):
         """Load a single COMET channel (by index) for a core on demand."""
         key = (core_id, int(channel_index))
@@ -618,20 +638,67 @@ class DatasetLoader:
         if path.is_dir() and (path.suffix == ".zarr" or path.suffixes == [".ome", ".zarr"]):
             try:
                 root = zarr.open(path, mode="r")
+                # prefer explicit "0" level
                 if "0" not in root:
-                    raise RuntimeError(f"OME-Zarr {path} missing level 0")
-
-                level0 = root["0"]
-                # level0 may be an Array or a group with "0" as full-res
-                if isinstance(level0, zarr.core.Array):
-                    arr5d = level0[:]          # (T, C, Z, Y, X)
+                    # sometimes the array is at root itself
+                    # try to detect array-like root
+                    if hasattr(root, "shape") and getattr(root, "ndim", None) is not None:
+                        level0 = root
+                    else:
+                        raise RuntimeError(f"OME-Zarr {path} missing level 0")
                 else:
-                    if "0" not in level0:
-                        raise RuntimeError(f"OME-Zarr {path}/0 missing full-res array")
-                    fullres = level0["0"]
-                    arr5d = fullres[:]         # (T, C, Z, Y, X)
+                    level0 = root["0"]
 
-                arr2d = arr5d[0, channel_index, 0, :, :]  # (Y, X)
+                # Determine whether level0 is an array or a group containing a full-res array
+                arr5d = None
+                # Try to detect zarr Array class robustly across zarr versions
+                zarr_array_type = getattr(zarr, "Array", None)
+                if zarr_array_type is None:
+                    # fallback to core.Array if present
+                    core_mod = getattr(zarr, "core", zarr)
+                    zarr_array_type = getattr(core_mod, "Array", None)
+
+                # If level0 is an array-like object (zarr array or numpy-like), try to read it
+                if zarr_array_type is not None and isinstance(level0, zarr_array_type):
+                    arr5d = level0[:]  # (T, C, Z, Y, X)
+                else:
+                    # If level0 is a group-like mapping, try to find a nested "0" array or a single array inside
+                    if hasattr(level0, "keys") and "0" in level0:
+                        fullres = level0["0"]
+                        arr5d = fullres[:]  # (T, C, Z, Y, X)
+                    else:
+                        # If level0 exposes shape/ndim, try to read it
+                        try:
+                            arr5d = np.asarray(level0)
+                        except Exception:
+                            raise RuntimeError(f"Unable to interpret OME-Zarr structure at {path}")
+
+                # Validate arr5d shape
+                if arr5d is None:
+                    raise RuntimeError(f"Failed to read OME-Zarr array for {path}")
+
+                # Expect arr5d to be 5D: (T, C, Z, Y, X) or similar
+                if arr5d.ndim == 5:
+                    arr2d = arr5d[0, channel_index, 0, :, :]  # (Y, X)
+                elif arr5d.ndim == 4:
+                    # maybe (C, Y, X) or (T, C, Y, X)
+                    if arr5d.shape[0] <= 8 and arr5d.shape[0] > arr5d.shape[-1]:
+                        # treat first axis as channels
+                        arr2d = arr5d[channel_index, :, :]
+                    else:
+                        # fallback: take first timepoint, channel index
+                        arr2d = arr5d[0, channel_index, :, :]
+                elif arr5d.ndim == 3:
+                    # (C, Y, X) or (Z, Y, X)
+                    if arr5d.shape[0] > 1 and arr5d.shape[0] <= 64:
+                        arr2d = arr5d[channel_index, :, :]
+                    else:
+                        arr2d = arr5d
+                else:
+                    # fallback: try to coerce to 2D
+                    arr2d = np.squeeze(arr5d)
+                    if arr2d.ndim != 2:
+                        raise RuntimeError(f"Unexpected array shape from OME-Zarr: {arr5d.shape}")
 
                 self._comet_cache[key] = arr2d
                 return arr2d
@@ -666,6 +733,114 @@ class DatasetLoader:
             logger.exception("Failed to load COMET channel %s for core %s from TIFF: %s",
                              channel_index, core_id, exc)
             raise
+
+    # ---------------------------------------------------------------------------
+    # Rasterise GeoJSON -> label mask and compute per-cell COMET stats
+    # ---------------------------------------------------------------------------
+    def load_geojson_mask(self, core_id: str, geojson_path: Optional[Path] = None, overwrite: bool = False):
+        """
+        Rasterize GeoJSON polygons (assumed COMET pixel coords) into a label mask for core_id.
+        Stores mask in self.cell_mask_by_core[core_id] and mapping label->cell_id.
+        Returns (mask, label_to_cell_id).
+        """
+        if core_id in self.cell_mask_by_core and not overwrite:
+            return self.cell_mask_by_core[core_id], self.cell_label_to_id_by_core.get(core_id, {})
+
+        if self.manifest is None:
+            raise RuntimeError("Manifest not loaded; call load() first.")
+
+        core = self.manifest.cores.get(core_id)
+        if core is None:
+            raise FileNotFoundError(f"Core {core_id} not found in manifest")
+
+        # find geojson path
+        if geojson_path is None:
+            if core.xenium_geojson_comet:
+                candidate = Path(core.xenium_geojson_comet)
+                if not candidate.is_absolute():
+                    candidate = self.folder / candidate
+                if candidate.exists():
+                    geojson_path = candidate
+            if geojson_path is None and core.xenium_folder:
+                candidate = core.xenium_folder / "cell_boundaries_comet_space.geojson"
+                if candidate.exists():
+                    geojson_path = candidate
+        if geojson_path is None or not Path(geojson_path).exists():
+            raise FileNotFoundError(f"GeoJSON not found for core {core_id}")
+
+        # load COMET channel to get shape
+        img = self.get_comet_channel(core_id, channel_index=0)
+        if img is None:
+            raise RuntimeError(f"Could not load COMET image for core {core_id} to determine mask size")
+        h = int(img.shape[0])
+        w = int(img.shape[1])
+
+        # read geojson
+        with open(geojson_path, "r") as f:
+            gj = json.load(f)
+
+        # Prepare blank label image (PIL uses (width, height))
+        label_img = Image.new("I", (w, h), 0)
+        draw = ImageDraw.Draw(label_img)
+
+        label_to_id: Dict[int, str] = {}
+        label = 1
+
+        for feat in gj.get("features", []):
+            props = feat.get("properties", {})
+            cid = str(props.get("cell_id") or props.get("name") or f"cell_{label}")
+            geom = feat.get("geometry")
+            if geom is None:
+                continue
+            poly = shape(geom)
+            if not poly.is_valid:
+                poly = make_valid(poly)
+                if poly.geom_type == "MultiPolygon":
+                    poly = max(poly.geoms, key=lambda p: p.area)
+            if not poly.is_valid or poly.area <= 0:
+                continue
+
+            # polygon coordinates are (x,y) in COMET pixels; PIL expects sequence of (x,y)
+            try:
+                coords = [(float(x), float(y)) for x, y in np.array(poly.exterior.coords)]
+                # draw polygon with integer label
+                draw.polygon(coords, outline=label, fill=label)
+                label_to_id[label] = cid
+                label += 1
+            except Exception:
+                continue
+
+        mask = np.asarray(label_img, dtype=np.int32)
+        self.cell_mask_by_core[core_id] = mask
+        self.cell_label_to_id_by_core[core_id] = label_to_id
+
+        # Optionally compute per-cell COMET stats (mean, median, sum) for channel 0
+        try:
+            channel = np.asarray(img, dtype=float)
+            labels = mask
+            unique_labels = np.unique(labels)
+            stats = []
+            for lab in unique_labels:
+                if lab == 0:
+                    continue
+                mask_bool = labels == lab
+                vals = channel[mask_bool]
+                if vals.size == 0:
+                    continue
+                stats.append({
+                    "label": int(lab),
+                    "cell_id": label_to_id.get(int(lab), ""),
+                    "area_px": int(mask_bool.sum()),
+                    "mean": float(np.nanmean(vals)),
+                    "median": float(np.nanmedian(vals)),
+                    "sum": float(np.nansum(vals)),
+                })
+            df_stats = pd.DataFrame(stats)
+            self.comet_cell_stats[core_id] = df_stats
+        except Exception:
+            self.comet_cell_stats[core_id] = None
+
+        return mask, label_to_id
 
     def __repr__(self) -> str:
         loaded = "loaded" if self.manifest else "not loaded"
