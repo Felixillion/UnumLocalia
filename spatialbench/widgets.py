@@ -174,18 +174,89 @@ class CellMaskRow(QWidget):
             return
 
         try:
-            # add labels layer (use viewer helper if available)
             try:
-                lbl_layer = self.sv.add_label_layer(core=core, labels=mask, name=lname, visible=True)
-            except Exception:
-                lbl_layer = self.sv.viewer.add_labels(mask, name=lname, visible=True)
-            lbl_layer.metadata = getattr(lbl_layer, "metadata", {}) or {}
-            lbl_layer.metadata["core"] = core
-            lbl_layer.metadata["modality"] = "cell_mask"
-            lbl_layer.metadata["sb_source"] = "geojson_mask"
-            lbl_layer.metadata["label_to_cell_id"] = id_map
-            lbl_layer.metadata["n_labels"] = int(len(id_map)) if id_map is not None else 0
-            self.info_lbl.setText(f"labels: {lbl_layer.metadata.get('n_labels', 0)}")
+                # Prefer normalized (translation-zeroed) COMET matrix if present, else raw
+                M_com_raw = None
+                try:
+                    M_com_raw = self.loader.alignment_matrices_comet.get(core)
+                except Exception:
+                    M_com_raw = None
+                if M_com_raw is None:
+                    try:
+                        M_com_raw = self.loader.alignment_matrices_comet_raw.get(core)
+                    except Exception:
+                        M_com_raw = None
+
+                # Convert to viewer / napari affine if helper exists
+                M_for_viewer = None
+                if M_com_raw is not None and hasattr(self.sv, "_convert_affine"):
+                    try:
+                        M_for_viewer = self.sv._convert_affine(M_com_raw)
+                    except Exception:
+                        M_for_viewer = None
+
+                # If no conversion helper, try to coerce a 2x3 affine for napari
+                if M_for_viewer is None and M_com_raw is not None:
+                    try:
+                        M_arr = np.asarray(M_com_raw, dtype=float)
+                        if M_arr.shape == (3, 3):
+                            # napari accepts 3x3 or 2x3; convert to 2x3
+                            M_for_viewer = M_arr[:2, :]
+                        elif M_arr.shape == (2, 3):
+                            M_for_viewer = M_arr
+                        else:
+                            # try reshape fallback
+                            M_for_viewer = M_arr.reshape(3, 3)[:2, :]
+                    except Exception:
+                        M_for_viewer = None
+
+                # Optional: sanity-check shapes against COMET channel (if available)
+                try:
+                    # prefer channel 0 as reference; don't raise if missing
+                    if hasattr(self.loader, "get_comet_channel"):
+                        ref = None
+                        try:
+                            ref = self.loader.get_comet_channel(core, channel_index=0, use_cache=True)
+                        except Exception:
+                            ref = None
+                        if ref is not None:
+                            # if shapes differ, log a warning (no crash)
+                            if getattr(ref, "shape", None) != getattr(mask, "shape", None):
+                                logger.warning("Mask shape %s != COMET shape %s for core %s", getattr(mask, "shape", None), getattr(ref, "shape", None), core)
+                except Exception:
+                    pass
+
+                # Add labels layer using viewer helper if available, passing affine if we computed one
+                if hasattr(self.sv, "add_label_layer"):
+                    try:
+                        lbl_layer = self.sv.add_label_layer(core=core, labels=mask, name=lname, affine=M_for_viewer, visible=True)
+                    except Exception:
+                        # fallback to napari API; pass affine if available
+                        try:
+                            lbl_layer = self.sv.viewer.add_labels(mask, name=lname, visible=True, affine=M_for_viewer)
+                        except Exception:
+                            lbl_layer = self.sv.viewer.add_labels(mask, name=lname, visible=True)
+                else:
+                    # no helper: use napari directly
+                    try:
+                        lbl_layer = self.sv.viewer.add_labels(mask, name=lname, visible=True, affine=M_for_viewer)
+                    except Exception:
+                        lbl_layer = self.sv.viewer.add_labels(mask, name=lname, visible=True)
+
+                # metadata and UI update
+                lbl_layer.metadata = getattr(lbl_layer, "metadata", {}) or {}
+                lbl_layer.metadata["core"] = core
+                lbl_layer.metadata["modality"] = "cell_mask"
+                lbl_layer.metadata["sb_source"] = "geojson_mask"
+                lbl_layer.metadata["label_to_cell_id"] = id_map
+                lbl_layer.metadata["n_labels"] = int(len(id_map)) if id_map is not None else 0
+                self.info_lbl.setText(f"labels: {lbl_layer.metadata.get('n_labels', 0)}")
+            except Exception as e:
+                logger.exception("Failed to add labels layer for %s: %s", core, e)
+                self.chk.blockSignals(True)
+                self.chk.setChecked(False)
+                self.chk.blockSignals(False)
+                self.info_lbl.setText("add failed")
         except Exception as e:
             logger.exception("Failed to add labels layer for %s: %s", core, e)
             self.chk.blockSignals(True)
