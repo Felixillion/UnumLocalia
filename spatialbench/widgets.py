@@ -606,19 +606,198 @@ class TranscriptChannelRow(QWidget):
         # Remove any existing layer first to avoid duplicates
         self._remove_layer_by_name(layer_name)
 
-        # Convert to viewer ordering (row, col) = (y, x)
-        pts_for_viewer = coords_mapped[:, ::-1]
-
-        # Add transcript layer using viewer API (viewer converts (x,y) -> (row,col))
-        created_layer = None
+        # --- Compute the same viewer affine pieces used for images ---
+        # We need the raw exported COMET matrix (contains translation) and the normalized linear part.
+        M_raw = None
+        M_norm = None
         try:
             try:
-                created_layer = self.sv.add_transcript_layer(layer_name, pts_for_viewer, color=self.color, visible=True)
-            except TypeError:
-                created_layer = self.sv.add_transcript_layer(core, self.gene, pts_for_viewer, color=self.color, visible=True)
+                M_raw = self.loader.alignment_matrices_comet_raw.get(core)
+            except Exception:
+                M_raw = None
+            try:
+                M_norm = self.loader.alignment_matrices_comet.get(core)
+            except Exception:
+                M_norm = None
+        except Exception:
+            M_raw = None
+            M_norm = None
+
+        # --- Use COMET-pixel coords and attach viewer affine (do not pre-warp points) ---
+        # Strategy:
+        # 1) coords_mapped are COMET pixels (x,y). Do NOT subtract raw translation here.
+        # 2) Convert to viewer ordering (row,col) and add points.
+        # 3) Attach the same viewer affine used for images/labels to the created layer.
+        pts_for_viewer = None
+        M_for_viewer = None
+        try:
+            # Compute the viewer affine (same logic as CellMaskRow)
+            try:
+                M_com_raw = None
+                try:
+                    M_com_raw = self.loader.alignment_matrices_comet.get(core)
+                except Exception:
+                    M_com_raw = None
+                if M_com_raw is None:
+                    try:
+                        M_com_raw = self.loader.alignment_matrices_comet_raw.get(core)
+                    except Exception:
+                        M_com_raw = None
+
+                if M_com_raw is not None and hasattr(self.sv, "_convert_affine"):
+                    try:
+                        M_for_viewer = self.sv._convert_affine(M_com_raw)
+                    except Exception:
+                        M_for_viewer = None
+
+                if M_for_viewer is None and M_com_raw is not None:
+                    try:
+                        M_arr2 = np.asarray(M_com_raw, dtype=float)
+                        if M_arr2.shape == (3, 3):
+                            M_for_viewer = M_arr2[:2, :]
+                        elif M_arr2.shape == (2, 3):
+                            M_for_viewer = M_arr2
+                        else:
+                            M_for_viewer = M_arr2.reshape(3, 3)[:2, :]
+                    except Exception:
+                        M_for_viewer = None
+            except Exception:
+                M_for_viewer = None
+
+            # Convert COMET-pixel coords to viewer ordering (row, col) = (y, x)
+            pts_for_viewer = coords_mapped[:, ::-1]
+        except Exception:
+            pts_for_viewer = coords_mapped[:, ::-1]
+
+        # --- Add transcript layer (pass COMET px coords) and attach the same image affine ---
+        created_layer = None
+        try:
+            # Prefer SpatialViewer helper signature (core, gene, coords, color, visible)
+            try:
+                created_layer = self.sv.add_transcript_layer(core, self.gene, coords_mapped, self.color, True)
+            except Exception:
+                # Fallbacks: try coords-first signatures (some viewers differ)
+                try:
+                    created_layer = self.sv.add_transcript_layer(coords_mapped, layer_name)
+                except Exception:
+                    try:
+                        created_layer = self.sv.add_transcript_layer(coords_mapped)
+                    except Exception:
+                        # Last resort: add via napari directly (coords must be (row,col) for napari Points)
+                        try:
+                            pts_for_napari = coords_mapped[:, ::-1]  # (row,col)
+                            created_layer = self.sv.viewer.add_points(pts_for_napari, name=layer_name, size=10, face_color=self.color, visible=True)
+                        except Exception as _e:
+                            raise _e
+
+            # Ensure created layer visible/color where possible
+            if created_layer is not None:
+                try:
+                    created_layer.visible = True
+                except Exception:
+                    pass
+                try:
+                    created_layer.face_color = self.color
+                except Exception:
+                    try:
+                        created_layer.properties["color"] = self.color
+                    except Exception:
+                        pass
+
+            # --- Determine authoritative 3x3 affine matrix for this core's COMET image ---
+            M_h = None
+            try:
+                # 1) Prefer an existing image layer affine matrix in metadata (most authoritative)
+                img_layer = None
+                try:
+                    img_layer = self.sv._get_layer(f"{core}::comet::DAPI")
+                except Exception:
+                    img_layer = None
+                if img_layer is None and hasattr(self.sv, "viewer"):
+                    for l in self.sv.viewer.layers:
+                        try:
+                            meta = getattr(l, "metadata", {}) or {}
+                            if meta.get("core") == core and meta.get("modality") == "comet":
+                                img_layer = l
+                                break
+                        except Exception:
+                            pass
+
+                if img_layer is not None:
+                    meta = getattr(img_layer, "metadata", {}) or {}
+                    # metadata may contain 'affine_matrix' (3x3) or 'affine_matrix' as list
+                    if "affine_matrix" in meta:
+                        M_h = np.asarray(meta["affine_matrix"], dtype=float)
+                    else:
+                        # try to read napari Affine/transform matrix from the image layer
+                        a_img = getattr(img_layer, "affine", None) or getattr(img_layer, "transform", None)
+                        if a_img is not None and hasattr(a_img, "matrix"):
+                            M_h = np.asarray(a_img.matrix, dtype=float)
+
+                # 2) If still None, build from loader matrices (normalized or raw)
+                if M_h is None:
+                    # prefer normalized (translation-zeroed) then raw
+                    M_com = None
+                    try:
+                        M_com = self.loader.alignment_matrices_comet.get(core)
+                    except Exception:
+                        M_com = None
+                    if M_com is None:
+                        try:
+                            M_com = self.loader.alignment_matrices_comet_raw.get(core)
+                        except Exception:
+                            M_com = None
+
+                    if M_com is not None:
+                        M_arr = np.asarray(M_com, dtype=float)
+                        # if 2x3 -> make 3x3 homogeneous
+                        if M_arr.shape == (2, 3):
+                            M_h = np.vstack([M_arr, [0.0, 0.0, 1.0]])
+                        elif M_arr.shape == (3, 3):
+                            M_h = M_arr
+                        else:
+                            try:
+                                M_h = M_arr.reshape(3, 3)
+                            except Exception:
+                                M_h = None
+            except Exception:
+                M_h = None
+
+            # --- Attach Napari Affine object to the created points layer (so Napari applies same mapping) ---
+            if created_layer is not None and M_h is not None:
+                try:
+                    from napari.utils.transforms import Affine
+                    # Ensure M_h is float64 and shape (3,3)
+                    M_h = np.asarray(M_h, dtype=float).reshape(3, 3)
+                    created_layer.affine = Affine(matrix=M_h)
+                except Exception:
+                    # fallback: try to set .affine.matrix or .transform.matrix directly
+                    try:
+                        a = getattr(created_layer, "affine", None)
+                        if a is not None and hasattr(a, "matrix"):
+                            a.matrix = M_h
+                        else:
+                            t = getattr(created_layer, "transform", None)
+                            if t is not None and hasattr(t, "matrix"):
+                                t.matrix = M_h
+                            else:
+                                created_layer.metadata = getattr(created_layer, "metadata", {}) or {}
+                                created_layer.metadata["affine_matrix"] = M_h.tolist()
+                    except Exception:
+                        # last resort: store matrix in metadata
+                        created_layer.metadata = getattr(created_layer, "metadata", {}) or {}
+                        created_layer.metadata["affine_matrix"] = M_h.tolist()
+
         except Exception as e:
             logger.exception("Failed to add transcript layer for %s / %s: %s", core, self.gene, e)
             return
+
+
+
+        # --- DEBUG START ---
+
+        # --- DEBUG END ---
+
 
         # Ensure created layer is discoverable and set metadata and size
         try:
@@ -636,6 +815,48 @@ class TranscriptChannelRow(QWidget):
                     pass
         except Exception:
             pass
+
+        # --- Attach Napari Affine object to the created points layer (correct way) ---
+        try:
+            if created_layer is not None and M_for_viewer is not None:
+                # Build a 3x3 homogeneous matrix from M_for_viewer (which may be 2x3 or 3x3)
+                M_arr = np.asarray(M_for_viewer, dtype=float)
+                if M_arr.shape == (2, 3):
+                    M_h = np.vstack([M_arr, [0.0, 0.0, 1.0]])
+                elif M_arr.shape == (3, 3):
+                    M_h = M_arr
+                else:
+                    M_h = M_arr.reshape(3, 3)
+
+                # Create a Napari Affine transform and assign it to the layer so Napari
+                # maps layer coordinates (COMET px) into world/viewer coordinates.
+                try:
+                    # Prefer the Napari Affine helper if available
+                    from napari.utils.transforms import Affine
+                    created_layer.affine = Affine(matrix=M_h)
+                except Exception:
+                    # Fallback: try to set .transform or .affine.matrix directly
+                    try:
+                        a = getattr(created_layer, "affine", None)
+                        if a is not None and hasattr(a, "matrix"):
+                            a.matrix = M_h
+                        else:
+                            t = getattr(created_layer, "transform", None)
+                            if t is not None and hasattr(t, "matrix"):
+                                t.matrix = M_h
+                            else:
+                                # Last resort: store matrix in metadata for other code to pick up
+                                created_layer.metadata = getattr(created_layer, "metadata", {}) or {}
+                                created_layer.metadata["affine_matrix"] = M_h.tolist()
+                    except Exception:
+                        # keep going; we don't want to crash the UI
+                        created_layer.metadata = getattr(created_layer, "metadata", {}) or {}
+                        created_layer.metadata["affine_matrix"] = M_h.tolist()
+        except Exception:
+            pass
+
+
+
 
         # Apply global dot size (prefer viewer stored value, else 25)
         size_val = 25.0
