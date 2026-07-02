@@ -837,10 +837,10 @@ class TranscriptChannelRow(QWidget):
 
 
 
-        # Optional conservative autoscale only when no transcript affine exists
+        # --- Autoscale guard: prevent upscaling transcript cloud (only allow shrinking) ---
         try:
             img = self.loader.he_arrays.get(core)
-            if img is not None and self.loader.transcript_affine_by_core.get(core) is None:
+            if img is not None:
                 img_h = img.shape[0]
                 img_w = img.shape[1] if img.ndim >= 2 else img.shape[-1]
                 coord_min = coords_mapped.min(axis=0)
@@ -849,11 +849,15 @@ class TranscriptChannelRow(QWidget):
                 coord_max_dim = max(coord_range[0], coord_range[1], 1.0)
                 img_max_dim = max(img_h, img_w, 1.0)
                 suggested_scale = img_max_dim / coord_max_dim
-                if suggested_scale > 1.25:
+                # Prevent upscaling: cap suggested_scale at 1.0 so we never enlarge the transcript cloud.
+                suggested_scale = min(suggested_scale, 1.0)
+                # Apply only if a meaningful downscale is required
+                if suggested_scale < 0.99:
                     center = (coord_min + coord_max) / 2.0
                     coords_mapped = (coords_mapped - center) * suggested_scale + center
         except Exception:
             pass
+
 
         # --- Choose authoritative 3x3 COMET->viewer matrix (M_h) for diagnostics ---
         M_h = None
