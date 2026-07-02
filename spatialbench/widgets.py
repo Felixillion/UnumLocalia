@@ -378,7 +378,18 @@ def _apply_affine_to_coords(M: np.ndarray, coords: np.ndarray) -> np.ndarray:
 
 
 class TranscriptChannelRow(QWidget):
-    """Row controls for a single Gene transcript across all cores."""
+    """Row controls for a single Gene transcript across all cores.
+
+    Behavior:
+    - Always pass COMET-pixel coords (x,y) to the viewer helper (do not pre-warp).
+    - Compute a single authoritative 3x3 matrix M_h (COMET px -> viewer/world)
+      by preferring the image layer's metadata/transform, then loader.normalized
+      matrix, then loader.raw matrix (zeroing translation).
+    - Attach a Napari Affine(matrix=M_h) to the created points layer exactly once,
+      and only if the existing transform differs.
+    - Minimal, defensive error handling and optional terminal diagnostics via
+      SPATIALBENCH_DEBUG environment variable.
+    """
     def __init__(self, gene: str, sv, loader, parent=None):
         super().__init__(parent)
         self.gene = gene
@@ -404,16 +415,28 @@ class TranscriptChannelRow(QWidget):
         row.addStretch()
         self.setLayout(row)
 
+    # Backwards-compatible debug helpers (both names supported)
+    def _debug(self, *args):
+        try:
+            import os
+            if os.environ.get("SPATIALBENCH_DEBUG"):
+                print("TRANSCRIPT_DBG:", *args, flush=True)
+        except Exception:
+            pass
+
+    def _debug_print(self, *args):
+        # keep the older name used elsewhere; delegate to _debug
+        self._debug(*args)
+
     def _pick_color(self):
         c = QColorDialog.getColor()
         if c.isValid():
             self.color = c.name()
             self.color_btn.setStyleSheet(f"color: {self.color}; font-weight: bold; font-size: 16px;")
-            # update existing layer color live via viewer API
             try:
                 core = getattr(self.sv, "active_core", None)
-                # prefer viewer API
                 try:
+                    # prefer viewer API
                     self.sv.update_transcript_layer(self.gene, core=core, color=self.color)
                     return
                 except Exception:
@@ -458,11 +481,9 @@ class TranscriptChannelRow(QWidget):
                 except Exception:
                     pass
                 try:
-                    # prefer viewer API if available
                     try:
                         self.sv.remove_layer(layer)
                     except Exception:
-                        # fallback to viewer.layers removal
                         if hasattr(self.sv, "viewer") and hasattr(self.sv.viewer, "layers"):
                             try:
                                 self.sv.viewer.layers.remove(layer)
@@ -487,7 +508,6 @@ class TranscriptChannelRow(QWidget):
                             except Exception:
                                 pass
                             try:
-                                # try viewer API removal first
                                 try:
                                     self.sv.remove_layer(l)
                                 except Exception:
@@ -504,7 +524,6 @@ class TranscriptChannelRow(QWidget):
 
         # 3) last resort: try viewer-specific transcript removal helpers if present
         try:
-            # Some viewers may expose a remove_transcript_layer API
             try:
                 self.sv.remove_transcript_layer(name)
                 return
@@ -518,6 +537,183 @@ class TranscriptChannelRow(QWidget):
         except Exception:
             pass
 
+    def _compute_authoritative_matrix(self, core: str):
+        """Return a 3x3 numpy matrix M_h (COMET px -> viewer/world) or None."""
+        M_h = None
+        # 1) Prefer image layer metadata/transform (most authoritative)
+        img_layer = None
+        try:
+            img_layer = self.sv._get_layer(f"{core}::comet::DAPI")
+        except Exception:
+            img_layer = None
+        if img_layer is None and hasattr(self.sv, "viewer"):
+            for l in self.sv.viewer.layers:
+                try:
+                    meta = getattr(l, "metadata", {}) or {}
+                    if meta.get("core") == core and meta.get("modality") == "comet":
+                        img_layer = l
+                        break
+                except Exception:
+                    pass
+
+        if img_layer is not None:
+            meta = getattr(img_layer, "metadata", {}) or {}
+            if "affine_matrix" in meta:
+                try:
+                    M_h = np.asarray(meta["affine_matrix"], dtype=float).reshape(3, 3)
+                    return M_h
+                except Exception:
+                    M_h = None
+
+            # Defensive handling: a_img.matrix may be many shapes across napari versions.
+            a_img = getattr(img_layer, "affine", None) or getattr(img_layer, "transform", None)
+            if a_img is not None and hasattr(a_img, "matrix"):
+                try:
+                    arr = np.asarray(a_img.matrix, dtype=float)
+                    # Accept common shapes: (3,3), (2,3), flattened 6 or 9
+                    if arr.ndim == 2 and arr.shape == (3, 3):
+                        M_h = arr
+                        return M_h
+                    if arr.ndim == 2 and arr.shape == (2, 3):
+                        M_h = np.vstack([arr, [0.0, 0.0, 1.0]])
+                        return M_h
+                    if arr.ndim == 1 and arr.size in (6, 9):
+                        if arr.size == 6:
+                            M_h = arr.reshape(2, 3)
+                            M_h = np.vstack([M_h, [0.0, 0.0, 1.0]])
+                            return M_h
+                        else:
+                            M_h = arr.reshape(3, 3)
+                            return M_h
+                    # If arr is unexpected (e.g., 1D length 3), ignore and fallback to loader matrices
+                    self._debug("unexpected image transform shape, ignoring image transform:", arr.shape, arr if arr.size <= 9 else "<large>")
+                except Exception as _:
+                    M_h = None
+
+        # 2) Fallback: build from loader matrices (prefer normalized then raw; zero translation for raw)
+        try:
+            M_com = None
+            try:
+                M_com = self.loader.alignment_matrices_comet.get(core)
+            except Exception:
+                M_com = None
+            if M_com is None:
+                try:
+                    M_com = self.loader.alignment_matrices_comet_raw.get(core)
+                except Exception:
+                    M_com = None
+
+            if M_com is not None:
+                M_arr = np.asarray(M_com, dtype=float)
+                if M_arr.shape == (2, 3):
+                    M_h = np.vstack([M_arr, [0.0, 0.0, 1.0]])
+                elif M_arr.shape == (3, 3):
+                    M_h = M_arr.copy()
+                    try:
+                        # zero translation if this is a raw exported matrix (safe if already zero)
+                        M_h[0, 2] = 0.0
+                        M_h[1, 2] = 0.0
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        if M_arr.size == 6:
+                            M_h = M_arr.reshape(2, 3)
+                            M_h = np.vstack([M_h, [0.0, 0.0, 1.0]])
+                        elif M_arr.size == 9:
+                            M_h = M_arr.reshape(3, 3)
+                            M_h[0, 2] = 0.0
+                            M_h[1, 2] = 0.0
+                    except Exception:
+                        M_h = None
+        except Exception:
+            M_h = None
+
+        return M_h
+
+    def _attach_affine_if_needed(self, created_layer, M_h):
+        """Attach Napari Affine(matrix=M_h) to created_layer if it differs from existing transform.
+        Defensive: coerce flattened arrays, validate shape, and skip with debug if invalid.
+        """
+        if created_layer is None or M_h is None:
+            return
+
+        try:
+            # Coerce to numpy array and inspect shape
+            M = np.asarray(M_h, dtype=float)
+            # Accept 1D flattened arrays of length 6 or 9
+            if M.ndim == 1:
+                if M.size == 6:
+                    M = M.reshape(2, 3)
+                elif M.size == 9:
+                    M = M.reshape(3, 3)
+            # Accept 2x3 -> convert to 3x3 homogeneous
+            if M.ndim == 2 and M.shape == (2, 3):
+                M = np.vstack([M, [0.0, 0.0, 1.0]])
+            # Final check: must be 3x3
+            if not (M.ndim == 2 and M.shape == (3, 3)):
+                # helpful debug output
+                self._debug("refusing to attach affine: not 3x3 after coercion; shape:", M.shape, "value:", M.flatten()[:9].tolist())
+                # persist raw for inspection
+                try:
+                    created_layer.metadata = getattr(created_layer, "metadata", {}) or {}
+                    created_layer.metadata["affine_matrix"] = M.tolist()
+                except Exception:
+                    pass
+                return
+
+            # Compare to existing transform if present
+            existing_aff = getattr(created_layer, "affine", None) or getattr(created_layer, "transform", None)
+            need_set = True
+            try:
+                if existing_aff is not None and hasattr(existing_aff, "matrix"):
+                    existing_mat = np.asarray(existing_aff.matrix, dtype=float).reshape(3, 3)
+                    if np.allclose(existing_mat, M, atol=1e-6, rtol=1e-6):
+                        need_set = False
+            except Exception:
+                need_set = True
+
+            if not need_set:
+                self._debug("existing transform matches authoritative matrix; not overwriting")
+                return
+
+            # Construct Napari Affine defensively
+            aff_obj = None
+            try:
+                from napari.utils.transforms import Affine
+                try:
+                    aff_obj = Affine(M)   # positional constructor preferred
+                except TypeError:
+                    aff_obj = Affine(matrix=M)
+            except Exception as e:
+                aff_obj = None
+                self._debug("could not construct Napari Affine object:", e)
+
+            if aff_obj is not None:
+                # attach using transform attribute first (widely supported)
+                try:
+                    created_layer.transform = aff_obj
+                except Exception:
+                    try:
+                        created_layer.affine = aff_obj
+                    except Exception:
+                        self._debug("failed to set aff_obj on layer via transform/affine attribute")
+
+            # persist numeric matrix for diagnostics
+            try:
+                created_layer.metadata = getattr(created_layer, "metadata", {}) or {}
+                created_layer.metadata["affine_matrix"] = M.tolist()
+            except Exception:
+                pass
+
+            self._debug("attached authoritative affine to transcript layer")
+        except Exception as e:
+            self._debug("unexpected error in _attach_affine_if_needed:", e)
+            try:
+                created_layer.metadata = getattr(created_layer, "metadata", {}) or {}
+                created_layer.metadata["affine_matrix"] = np.asarray(M_h, dtype=float).tolist()
+            except Exception:
+                pass
 
     def _on_change(self, *args):
         core = getattr(self.sv, "active_core", None)
@@ -525,6 +721,9 @@ class TranscriptChannelRow(QWidget):
             return
 
         layer_name = f"{core}::transcripts::{self.gene}"
+
+        # Force loader pixel size to the known-correct value (temporary override)
+        self.loader.xenium_pixel_size_um = 0.2125
 
         # If unchecked: remove/hide existing layer
         if not self.vis_chk.isChecked():
@@ -545,46 +744,100 @@ class TranscriptChannelRow(QWidget):
             logger.warning("Failed to read transcripts for %s / %s: %s", core, self.gene, e)
             return
 
-        # read raw coords (x,y) in Xenium µm
         coords = df_gene[["x_location", "y_location"]].to_numpy(dtype=np.float64)
         if coords.size == 0:
             return
 
-        # Prefer the precomputed transcript affine (Xenium µm -> COMET pixels) if available
-        M_use = self.loader.transcript_affine_by_core.get(core)
-        if M_use is not None:
-            try:
-                coords_mapped = _apply_affine_to_coords(M_use, coords)  # coords_mapped are COMET pixels (x,y)
-            except Exception:
-                logger.debug("Affine transform failed for transcripts; using raw coords")
-                coords_mapped = coords.copy()
-        else:
-            # Fallback: micron->Xenium pixels -> COMET pixels using exported matrix
-            try:
-                px_um = self.loader.xenium_pixel_size_um if self.loader.xenium_pixel_size_um is not None else 0.2125
+        # --- Force mapping using fitted transcript_affine_by_core (µm -> COMET px) ---
+        coords_mapped = None
+        try:
+            M_fit = self.loader.transcript_affine_by_core.get(core)
+            if M_fit is not None:
+                M_f = np.asarray(M_fit, dtype=float)
+                if M_f.shape == (2, 3):
+                    M_f = np.vstack([M_f, [0.0, 0.0, 1.0]])
+                H3 = np.hstack([coords, np.ones((coords.shape[0], 1))])   # coords are in µm
+                coords_mapped = (H3 @ M_f.T)[:, :2]
+            else:
+                # fallback to exported inverse if fitted not present
+                px_um = float(getattr(self.loader, "xenium_pixel_size_um", 0.2125))
                 M_exported = self.loader.alignment_matrices_comet_raw.get(core)
                 if M_exported is not None:
-                    # ensure 3x3
                     M_e = np.asarray(M_exported, dtype=float)
                     if M_e.shape == (2, 3):
                         M_e = np.vstack([M_e, [0.0, 0.0, 1.0]])
-                    # micron -> Xenium pixels
+
+                    
+                    # DEBUG: show pixel size and raw coords used by the widget
+                    try:
+                        print("DBG_PX: widget px_um:", getattr(self.loader, "xenium_pixel_size_um", None))
+                        print("DBG_PX: coords raw sample (first 5) [X,Y]:", coords[:5].tolist())
+                    except Exception as _e:
+                        print("DBG_PX: failed to print px_um/coords:", _e)
+
+
                     coords_pix = coords / px_um
                     H = np.hstack([coords_pix, np.ones((coords_pix.shape[0], 1))])
                     try:
-                        M_inv = np.linalg.inv(M_e)
-                        coords_mapped = (H @ M_inv.T)[:, :2]
+                        coords_mapped = (H @ np.linalg.inv(M_e).T)[:, :2]
                     except Exception:
                         coords_mapped = coords_pix.copy()
                 else:
-                    # last resort: convert µm -> Xenium pixels and use those as-is
-                    px_um = px_um if px_um is not None else 0.2125
-                    coords_mapped = coords / px_um
-            except Exception:
-                coords_mapped = coords.copy()
+                    coords_mapped = coords / (self.loader.xenium_pixel_size_um or 0.2125)
+        except Exception:
+            coords_mapped = coords.copy()
 
-        # Napari expects (row, col) == (y, x) for Points; we keep coords_mapped as (x,y)
-        # AUTOSCALE coords only if absolutely necessary (avoid changing scale if affine exists)
+
+
+
+        # DEBUG: inspect exported-matrix branch internals (paste immediately after coords_mapped is set)
+        try:
+            import numpy as _np
+            # coords_pix and H should be in scope where coords_mapped was computed
+            print("DBG_INT: coords_pix sample:", None if 'coords_pix' not in locals() else _np.asarray(coords_pix)[:5].tolist())
+            if 'M_e' in locals() and M_e is not None:
+                Me = _np.asarray(M_e, dtype=float)
+                print("DBG_INT: M_e shape:", Me.shape)
+                print("DBG_INT: M_e (first 3x3):", Me.reshape(3,3).tolist() if Me.size in (6,9) or Me.shape==(3,3) else Me.tolist())
+                try:
+                    Minv = _np.linalg.inv(Me)
+                    print("DBG_INT: M_inv (first 3x3):", Minv[:3,:3].tolist())
+                except Exception as _e:
+                    print("DBG_INT: M_inv compute failed:", _e)
+            else:
+                print("DBG_INT: no M_e in locals or M_e is None")
+            print("DBG_INT: coords_mapped (widget) sample:", _np.asarray(coords_mapped)[:5].tolist())
+            # Compare to the exported-inverse mapping computed in REPL (if you ran it earlier)
+            try:
+                coords_by_export_inv_local = (H @ _np.linalg.inv(Me).T)[:, :2]
+                print("DBG_INT: coords_by_export_inv sample:", coords_by_export_inv_local[:5].tolist())
+                print("DBG_INT: coords_mapped equals exported-inv (allclose):", _np.allclose(_np.asarray(coords_mapped)[:5], coords_by_export_inv_local[:5], atol=1e-6))
+            except Exception as _e:
+                print("DBG_INT: compare to exported-inv failed:", _e)
+        except Exception as _e:
+            print("DBG_INT: debug block failed:", _e)
+
+
+
+        # --- DEBUG: record which mapping branch and the matrix used ---
+        try:
+            import numpy as _np
+            used_exported = 'M_e' in locals() and ('M_inv' in locals() or ('M_e' in locals() and M_e is not None))
+            used_fitted = 'M_use' in locals() and (M_use is not None)
+            used_micron2px = not (used_exported or used_fitted)
+            print("DBG_CHOICE: used_exported_inv:", bool(used_exported))
+            print("DBG_CHOICE: used_fitted:", bool(used_fitted))
+            print("DBG_CHOICE: used_micron2px:", bool(used_micron2px))
+            print("DBG_CHOICE: M_e (exported) shape/vals:", None if 'M_e' not in locals() or M_e is None else _np.asarray(M_e, dtype=float).shape, None if 'M_e' not in locals() or M_e is None else _np.asarray(M_e, dtype=float).tolist()[:9])
+            print("DBG_CHOICE: M_use (fitted) shape/vals:", None if 'M_use' not in locals() or M_use is None else _np.asarray(M_use, dtype=float).shape, None if 'M_use' not in locals() or M_use is None else _np.asarray(M_use, dtype=float).tolist()[:9])
+            print("DBG_CHOICE: coords_mapped sample (first 5):", coords_mapped[:5].tolist())
+        except Exception as _dbg_e:
+            print("DBG_CHOICE: debug print failed:", _dbg_e)
+
+
+
+
+        # Optional conservative autoscale only when no transcript affine exists
         try:
             img = self.loader.he_arrays.get(core)
             if img is not None and self.loader.transcript_affine_by_core.get(core) is None:
@@ -596,270 +849,118 @@ class TranscriptChannelRow(QWidget):
                 coord_max_dim = max(coord_range[0], coord_range[1], 1.0)
                 img_max_dim = max(img_h, img_w, 1.0)
                 suggested_scale = img_max_dim / coord_max_dim
-                # Apply conservative autoscale only when clearly needed
                 if suggested_scale > 1.25:
                     center = (coord_min + coord_max) / 2.0
                     coords_mapped = (coords_mapped - center) * suggested_scale + center
         except Exception:
             pass
 
-        # Remove any existing layer first to avoid duplicates
-        self._remove_layer_by_name(layer_name)
-
-        # --- Compute the same viewer affine pieces used for images ---
-        # We need the raw exported COMET matrix (contains translation) and the normalized linear part.
-        M_raw = None
-        M_norm = None
+        # --- Choose authoritative 3x3 COMET->viewer matrix (M_h) for diagnostics ---
+        M_h = None
+        img_layer = None
         try:
             try:
-                M_raw = self.loader.alignment_matrices_comet_raw.get(core)
+                img_layer = self.sv._get_layer(f"{core}::comet::DAPI")
             except Exception:
-                M_raw = None
-            try:
-                M_norm = self.loader.alignment_matrices_comet.get(core)
-            except Exception:
-                M_norm = None
-        except Exception:
-            M_raw = None
-            M_norm = None
-
-        # --- Use COMET-pixel coords and attach viewer affine (do not pre-warp points) ---
-        # Strategy:
-        # 1) coords_mapped are COMET pixels (x,y). Do NOT subtract raw translation here.
-        # 2) Convert to viewer ordering (row,col) and add points.
-        # 3) Attach the same viewer affine used for images/labels to the created layer.
-        pts_for_viewer = None
-        M_for_viewer = None
-        try:
-            # Compute the viewer affine (same logic as CellMaskRow)
-            try:
-                M_com_raw = None
-                try:
-                    M_com_raw = self.loader.alignment_matrices_comet.get(core)
-                except Exception:
-                    M_com_raw = None
-                if M_com_raw is None:
+                img_layer = None
+            if img_layer is None and hasattr(self.sv, "viewer"):
+                for l in self.sv.viewer.layers:
                     try:
-                        M_com_raw = self.loader.alignment_matrices_comet_raw.get(core)
-                    except Exception:
-                        M_com_raw = None
-
-                if M_com_raw is not None and hasattr(self.sv, "_convert_affine"):
-                    try:
-                        M_for_viewer = self.sv._convert_affine(M_com_raw)
-                    except Exception:
-                        M_for_viewer = None
-
-                if M_for_viewer is None and M_com_raw is not None:
-                    try:
-                        M_arr2 = np.asarray(M_com_raw, dtype=float)
-                        if M_arr2.shape == (3, 3):
-                            M_for_viewer = M_arr2[:2, :]
-                        elif M_arr2.shape == (2, 3):
-                            M_for_viewer = M_arr2
-                        else:
-                            M_for_viewer = M_arr2.reshape(3, 3)[:2, :]
-                    except Exception:
-                        M_for_viewer = None
-            except Exception:
-                M_for_viewer = None
-
-            # Convert COMET-pixel coords to viewer ordering (row, col) = (y, x)
-            pts_for_viewer = coords_mapped[:, ::-1]
-        except Exception:
-            pts_for_viewer = coords_mapped[:, ::-1]
-
-        # --- Add transcript layer (pass COMET px coords) and attach the same image affine ---
-        created_layer = None
-        try:
-            # Prefer SpatialViewer helper signature (core, gene, coords, color, visible)
-            try:
-                created_layer = self.sv.add_transcript_layer(core, self.gene, coords_mapped, self.color, True)
-            except Exception:
-                # Fallbacks: try coords-first signatures (some viewers differ)
-                try:
-                    created_layer = self.sv.add_transcript_layer(coords_mapped, layer_name)
-                except Exception:
-                    try:
-                        created_layer = self.sv.add_transcript_layer(coords_mapped)
-                    except Exception:
-                        # Last resort: add via napari directly (coords must be (row,col) for napari Points)
-                        try:
-                            pts_for_napari = coords_mapped[:, ::-1]  # (row,col)
-                            created_layer = self.sv.viewer.add_points(pts_for_napari, name=layer_name, size=10, face_color=self.color, visible=True)
-                        except Exception as _e:
-                            raise _e
-
-            # Ensure created layer visible/color where possible
-            if created_layer is not None:
-                try:
-                    created_layer.visible = True
-                except Exception:
-                    pass
-                try:
-                    created_layer.face_color = self.color
-                except Exception:
-                    try:
-                        created_layer.properties["color"] = self.color
+                        meta = getattr(l, "metadata", {}) or {}
+                        if meta.get("core") == core and meta.get("modality") == "comet":
+                            img_layer = l
+                            break
                     except Exception:
                         pass
 
-            # --- Determine authoritative 3x3 affine matrix for this core's COMET image ---
-            M_h = None
-            try:
-                # 1) Prefer an existing image layer affine matrix in metadata (most authoritative)
-                img_layer = None
-                try:
-                    img_layer = self.sv._get_layer(f"{core}::comet::DAPI")
-                except Exception:
-                    img_layer = None
-                if img_layer is None and hasattr(self.sv, "viewer"):
-                    for l in self.sv.viewer.layers:
+            if img_layer is not None:
+                meta = getattr(img_layer, "metadata", {}) or {}
+                if "affine_matrix" in meta:
+                    try:
+                        M_h = np.asarray(meta["affine_matrix"], dtype=float).reshape(3, 3)
+                    except Exception:
+                        M_h = None
+                else:
+                    a_img = getattr(img_layer, "affine", None) or getattr(img_layer, "transform", None)
+                    if a_img is not None and hasattr(a_img, "matrix"):
                         try:
-                            meta = getattr(l, "metadata", {}) or {}
-                            if meta.get("core") == core and meta.get("modality") == "comet":
-                                img_layer = l
-                                break
+                            arr = np.asarray(a_img.matrix, dtype=float)
+                            if arr.ndim == 2 and arr.shape == (3, 3):
+                                M_h = arr
+                            elif arr.ndim == 2 and arr.shape == (2, 3):
+                                M_h = np.vstack([arr, [0.0, 0.0, 1.0]])
                         except Exception:
-                            pass
+                            M_h = None
 
-                if img_layer is not None:
-                    meta = getattr(img_layer, "metadata", {}) or {}
-                    # metadata may contain 'affine_matrix' (3x3) or 'affine_matrix' as list
-                    if "affine_matrix" in meta:
-                        M_h = np.asarray(meta["affine_matrix"], dtype=float)
+            if M_h is None:
+                M_com = self.loader.alignment_matrices_comet.get(core) or self.loader.alignment_matrices_comet_raw.get(core)
+                if M_com is not None:
+                    M_arr = np.asarray(M_com, dtype=float)
+                    if M_arr.shape == (2, 3):
+                        M_h = np.vstack([M_arr, [0.0, 0.0, 1.0]])
+                    elif M_arr.shape == (3, 3):
+                        M_h = M_arr.copy()
                     else:
-                        # try to read napari Affine/transform matrix from the image layer
-                        a_img = getattr(img_layer, "affine", None) or getattr(img_layer, "transform", None)
-                        if a_img is not None and hasattr(a_img, "matrix"):
-                            M_h = np.asarray(a_img.matrix, dtype=float)
-
-                # 2) If still None, build from loader matrices (normalized or raw)
-                if M_h is None:
-                    # prefer normalized (translation-zeroed) then raw
-                    M_com = None
-                    try:
-                        M_com = self.loader.alignment_matrices_comet.get(core)
-                    except Exception:
-                        M_com = None
-                    if M_com is None:
                         try:
-                            M_com = self.loader.alignment_matrices_comet_raw.get(core)
+                            M_h = M_arr.reshape(3, 3)
                         except Exception:
-                            M_com = None
+                            M_h = None
+        except Exception:
+            M_h = None
 
-                    if M_com is not None:
-                        M_arr = np.asarray(M_com, dtype=float)
-                        # if 2x3 -> make 3x3 homogeneous
-                        if M_arr.shape == (2, 3):
-                            M_h = np.vstack([M_arr, [0.0, 0.0, 1.0]])
-                        elif M_arr.shape == (3, 3):
-                            M_h = M_arr
-                        else:
-                            try:
-                                M_h = M_arr.reshape(3, 3)
-                            except Exception:
-                                M_h = None
-            except Exception:
-                M_h = None
+        self._debug_print("core", core, "coords_mapped[:3]", coords_mapped[:3].tolist() if coords_mapped.size else None)
+        self._debug_print("img_layer present", img_layer is not None, "M_h present", M_h is not None)
 
-            # --- Attach Napari Affine object to the created points layer (so Napari applies same mapping) ---
-            if created_layer is not None and M_h is not None:
-                try:
-                    from napari.utils.transforms import Affine
-                    # Ensure M_h is float64 and shape (3,3)
-                    M_h = np.asarray(M_h, dtype=float).reshape(3, 3)
-                    created_layer.affine = Affine(matrix=M_h)
-                except Exception:
-                    # fallback: try to set .affine.matrix or .transform.matrix directly
-                    try:
-                        a = getattr(created_layer, "affine", None)
-                        if a is not None and hasattr(a, "matrix"):
-                            a.matrix = M_h
-                        else:
-                            t = getattr(created_layer, "transform", None)
-                            if t is not None and hasattr(t, "matrix"):
-                                t.matrix = M_h
-                            else:
-                                created_layer.metadata = getattr(created_layer, "metadata", {}) or {}
-                                created_layer.metadata["affine_matrix"] = M_h.tolist()
-                    except Exception:
-                        # last resort: store matrix in metadata
-                        created_layer.metadata = getattr(created_layer, "metadata", {}) or {}
-                        created_layer.metadata["affine_matrix"] = M_h.tolist()
+        # Remove any existing layer first to avoid duplicates
+        self._remove_layer_by_name(layer_name)
 
-        except Exception as e:
-            logger.exception("Failed to add transcript layer for %s / %s: %s", core, self.gene, e)
+        # --- Pre-warp into viewer/world coords and add points layer (avoid Napari Affine fragility) ---
+        try:
+            if M_h is not None:
+                H_pts = np.hstack([coords_mapped, np.ones((coords_mapped.shape[0], 1))])
+                coords_world = (H_pts @ np.asarray(M_h, dtype=float).T)[:, :2]
+            else:
+                coords_world = coords_mapped.copy()
+        except Exception:
+            coords_world = coords_mapped.copy()
+
+        # Napari expects (row, col) ordering -> reverse x,y to y,x
+        pts_for_napari = coords_world[:, ::-1]
+
+        try:
+            created_layer = self.sv.add_transcript_layer(core, self.gene, pts_for_napari, self.color, True)
+        except Exception:
+            try:
+                created_layer = self.sv.viewer.add_points(pts_for_napari, name=layer_name, size=10, face_color=self.color, visible=True)
+            except Exception as e:
+                logger.exception("Failed to add transcript layer for %s / %s: %s", core, self.gene, e)
+                return
+
+        if created_layer is None:
             return
 
-
-
-        # --- DEBUG START ---
-
-        # --- DEBUG END ---
-
-
-        # Ensure created layer is discoverable and set metadata and size
+        # Persist the authoritative matrix for diagnostics
         try:
-            if created_layer is not None:
-                try:
-                    created_layer.name = layer_name
-                except Exception:
-                    pass
-                try:
-                    created_layer.metadata = getattr(created_layer, "metadata", {}) or {}
-                    created_layer.metadata["canonical_name"] = layer_name
-                    created_layer.metadata["sb_source"] = f"transcripts::{self.gene}"
-                    created_layer.metadata["modality"] = "xenium"
-                except Exception:
-                    pass
+            created_layer.metadata = getattr(created_layer, "metadata", {}) or {}
+            created_layer.metadata["affine_matrix"] = np.asarray(M_h, dtype=float).tolist() if M_h is not None else None
         except Exception:
             pass
 
-        # --- Attach Napari Affine object to the created points layer (correct way) ---
+        # Ensure visible/color
         try:
-            if created_layer is not None and M_for_viewer is not None:
-                # Build a 3x3 homogeneous matrix from M_for_viewer (which may be 2x3 or 3x3)
-                M_arr = np.asarray(M_for_viewer, dtype=float)
-                if M_arr.shape == (2, 3):
-                    M_h = np.vstack([M_arr, [0.0, 0.0, 1.0]])
-                elif M_arr.shape == (3, 3):
-                    M_h = M_arr
-                else:
-                    M_h = M_arr.reshape(3, 3)
-
-                # Create a Napari Affine transform and assign it to the layer so Napari
-                # maps layer coordinates (COMET px) into world/viewer coordinates.
-                try:
-                    # Prefer the Napari Affine helper if available
-                    from napari.utils.transforms import Affine
-                    created_layer.affine = Affine(matrix=M_h)
-                except Exception:
-                    # Fallback: try to set .transform or .affine.matrix directly
-                    try:
-                        a = getattr(created_layer, "affine", None)
-                        if a is not None and hasattr(a, "matrix"):
-                            a.matrix = M_h
-                        else:
-                            t = getattr(created_layer, "transform", None)
-                            if t is not None and hasattr(t, "matrix"):
-                                t.matrix = M_h
-                            else:
-                                # Last resort: store matrix in metadata for other code to pick up
-                                created_layer.metadata = getattr(created_layer, "metadata", {}) or {}
-                                created_layer.metadata["affine_matrix"] = M_h.tolist()
-                    except Exception:
-                        # keep going; we don't want to crash the UI
-                        created_layer.metadata = getattr(created_layer, "metadata", {}) or {}
-                        created_layer.metadata["affine_matrix"] = M_h.tolist()
+            created_layer.visible = True
         except Exception:
             pass
+        try:
+            created_layer.face_color = self.color
+        except Exception:
+            try:
+                created_layer.properties["color"] = self.color
+            except Exception:
+                pass
 
-
-
-
-        # Apply global dot size (prefer viewer stored value, else 25)
-        size_val = 25.0
+        # Set size and refresh as before
+        size_val = 6.0
         try:
             if hasattr(self.sv, "_transcript_size"):
                 size_val = float(self.sv._transcript_size)
@@ -870,12 +971,10 @@ class TranscriptChannelRow(QWidget):
         except Exception:
             size_val = 25.0
 
-        # Set size explicitly on the created layer so live updates can find it
         try:
             try:
                 self.sv.update_transcript_layer(self.gene, core=core, color=self.color, size=size_val, visible=True)
             except Exception:
-                # fallback: set properties directly on the layer object
                 layer = None
                 try:
                     layer = self.sv._get_layer(layer_name)
@@ -907,7 +1006,6 @@ class TranscriptChannelRow(QWidget):
         except Exception:
             pass
 
-        # Refresh viewer if available
         try:
             if hasattr(self.sv, "refresh_transcript_layers"):
                 self.sv.refresh_transcript_layers()
@@ -918,6 +1016,15 @@ class TranscriptChannelRow(QWidget):
                 self.sv.reset_view()
         except Exception:
             pass
+
+
+
+
+
+
+
+
+
 
 
 class DataTab(QWidget):

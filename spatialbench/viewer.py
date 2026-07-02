@@ -124,11 +124,26 @@ class SpatialViewer:
             affine=self._convert_affine(affine),
             visible=is_visible
         )
+        # store metadata so other code can find it
         layer.metadata.update({
             "core": core,
             "modality": "he",
             "user_visible": visible
         })
+
+        # --- NEW: persist the affine matrix in metadata so callers can read the exact matrix Napari uses
+        try:
+            if affine is not None:
+                # convert to 3x3 homogeneous if needed
+                M = np.asarray(affine, dtype=float)
+                if M.shape == (2, 3):
+                    M = np.vstack([M, [0.0, 0.0, 1.0]])
+                elif M.shape != (3, 3):
+                    M = M.reshape(3, 3)
+                layer.metadata["affine_matrix"] = M.tolist()
+        except Exception:
+            # don't crash on metadata write
+            pass
 
         if not is_rgb and brightness != 0.0:
             lo, hi = layer.contrast_limits
@@ -177,6 +192,18 @@ class SpatialViewer:
             "marker": marker_name,
             "user_visible": visible
         })
+
+        # persist the affine matrix in metadata so callers can read the exact matrix Napari uses
+        try:
+            if affine is not None:
+                M = np.asarray(affine, dtype=float)
+                if M.shape == (2, 3):
+                    M = np.vstack([M, [0.0, 0.0, 1.0]])
+                elif M.shape != (3, 3):
+                    M = M.reshape(3, 3)
+                layer.metadata["affine_matrix"] = M.tolist()
+        except Exception:
+            pass
 
         if vmin is not None or vmax is not None:
             lo = vmin if vmin is not None else float(array.min())
@@ -231,6 +258,7 @@ class SpatialViewer:
         size: float = _DEFAULT_TRANSCRIPT_SIZE,
         opacity: float = 0.8,
         visible: bool = True,
+        affine: Optional[np.ndarray] = None,
     ):
         layer_name = f"{core}::transcripts::{gene}"
         self._remove_layer_if_exists(layer_name)
@@ -249,15 +277,72 @@ class SpatialViewer:
             visible=is_visible,
             blending="translucent",
         )
-        
+
         layer.metadata.update({
             "core": core,
             "modality": "xenium",
             "marker": gene,
             "user_visible": visible
         })
-        
+
+        # If an authoritative affine was provided, coerce to 3x3, attach a Napari Affine,
+        # and persist the matrix in metadata. Be defensive about shapes and Napari versions.
+        if affine is not None:
+            try:
+                M = np.asarray(affine, dtype=float).copy()
+                # Accept flattened arrays (6 or 9), 2x3, or 3x3
+                if M.ndim == 1:
+                    if M.size == 6:
+                        M = M.reshape(2, 3)
+                    elif M.size == 9:
+                        M = M.reshape(3, 3)
+                if M.shape == (2, 3):
+                    M = np.vstack([M, [0.0, 0.0, 1.0]])
+                # final guard: if still not 3x3, try reshape
+                if M.shape != (3, 3):
+                    try:
+                        M = M.reshape(3, 3)
+                    except Exception:
+                        raise ValueError("affine could not be coerced to 3x3")
+
+                # Construct Napari Affine using positional arg where possible
+                aff_obj = None
+                try:
+                    from napari.utils.transforms import Affine
+                    try:
+                        aff_obj = Affine(M)   # positional constructor is broadly supported
+                    except TypeError:
+                        # some versions accept keyword 'matrix'
+                        aff_obj = Affine(matrix=M)
+                except Exception:
+                    aff_obj = None
+
+                # Attach transform to layer using the most compatible attribute
+                if aff_obj is not None:
+                    try:
+                        layer.transform = aff_obj
+                    except Exception:
+                        try:
+                            layer.affine = aff_obj
+                        except Exception:
+                            pass
+
+                # Always persist the numeric matrix for diagnostics
+                try:
+                    layer.metadata = getattr(layer, "metadata", {}) or {}
+                    layer.metadata["affine_matrix"] = M.tolist()
+                except Exception:
+                    pass
+            except Exception:
+                # If anything fails, persist the raw array for inspection
+                try:
+                    layer.metadata = getattr(layer, "metadata", {}) or {}
+                    layer.metadata["affine_matrix"] = np.asarray(affine, dtype=float).tolist()
+                except Exception:
+                    pass
+
         return layer
+
 
     def update_transcript_layer(
         self,

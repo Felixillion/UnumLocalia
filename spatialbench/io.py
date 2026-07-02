@@ -463,6 +463,38 @@ class DatasetLoader:
                                         px_um = float(phys_x)
                                         if self.xenium_pixel_size_um is None:
                                             self.xenium_pixel_size_um = px_um
+
+                                        # --- DEBUG: record where xenium_pixel_size_um is coming from ---
+                                        try:
+                                            import traceback, os, json
+                                            src = None
+                                            # try to capture a manifest path or source if available in local vars
+                                            if 'manifest_entry' in locals():
+                                                try:
+                                                    src = getattr(manifest_entry, "path", None) or getattr(manifest_entry, "filename", None)
+                                                except Exception:
+                                                    src = None
+                                            # fallback: try to inspect any nearby variables that look like a path
+                                            if src is None:
+                                                for name in ("path", "filename", "file", "xml_path", "ome_xml"):
+                                                    if name in locals():
+                                                        try:
+                                                            v = locals()[name]
+                                                            if isinstance(v, str) and os.path.exists(v):
+                                                                src = v
+                                                                break
+                                                        except Exception:
+                                                            pass
+                                            print("PXDBG: setting loader.xenium_pixel_size_um ->", px_um, " (detected source:", src, ")", flush=True)
+                                            # print a short stack trace so we can see who invoked this code
+                                            for line in traceback.format_stack()[-6:]:
+                                                print("PXDBG:   " + line.strip(), flush=True)
+                                        except Exception as _pxdbg_e:
+                                            print("PXDBG: debug print failed:", _pxdbg_e, flush=True)
+
+                                        # actual assignment (unchanged)
+                                        self.xenium_pixel_size_um = px_um
+
                                         logger.info("Found PhysicalSizeX in OME-XML (µm): %s", phys_x)
                                     except Exception:
                                         pass
