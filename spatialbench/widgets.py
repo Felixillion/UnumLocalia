@@ -277,6 +277,8 @@ class CometChannelRow(QWidget):
         self.sv = sv
         self.loader = loader
 
+        self.layers_tab = None
+
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 2, 0, 2)
         row.setSpacing(4)
@@ -343,6 +345,12 @@ class CometChannelRow(QWidget):
         if core in self.loader.comet_thresholds:
             self.loader.comet_thresholds[core][self.marker] = (float(vmin), float(vmax))
 
+        if self.layers_tab is not None:
+            if self.vis_chk.isChecked():
+                self.layers_tab.active_proteins.add(self.marker)
+            else:
+                self.layers_tab.active_proteins.discard(self.marker)
+
         self.sv.update_comet_layer(
             self.marker,
             core=core,
@@ -396,6 +404,9 @@ class TranscriptChannelRow(QWidget):
         self.gene = gene
         self.sv = sv
         self.loader = loader
+
+        self.layers_tab = None
+
         self.color = "yellow"
 
         row = QHBoxLayout(self)
@@ -422,6 +433,10 @@ class TranscriptChannelRow(QWidget):
         c = QColorDialog.getColor()
         if c.isValid():
             self.color = c.name()
+
+            if self.layers_tab is not None:
+                self.layers_tab.active_gene_colors[self.gene] = self.color
+
             self.color_btn.setStyleSheet(f"color: {self.color}; font-weight: bold; font-size: 16px;")
             try:
                 core = getattr(self.sv, "active_core", None)
@@ -708,6 +723,14 @@ class TranscriptChannelRow(QWidget):
 
     def _on_change(self, *args):
         core = getattr(self.sv, "active_core", None)
+
+        if self.layers_tab is not None:
+            if self.vis_chk.isChecked():
+                self.layers_tab.active_genes.add(self.gene)
+                self.layers_tab.active_gene_colors[self.gene] = self.color
+            else:
+                self.layers_tab.active_genes.discard(self.gene)
+                
         if not core:
             return
 
@@ -1037,6 +1060,15 @@ class LayersTab(QWidget):
         self.comet_rows: List[CometChannelRow] = []
         self.gene_rows: List[TranscriptChannelRow] = []
 
+        # Persisted layer state across core swaps
+        self.active_genes = set()
+        self.active_proteins = set()
+
+        self.active_gene_colors = {}
+
+        self.he_visible = True
+        self.cell_masks_visible = False
+
         layout = QVBoxLayout(self)
 
         # 1. Core Selection
@@ -1149,6 +1181,7 @@ class LayersTab(QWidget):
 
             for p in loader.proteins:
                 row = CometChannelRow(p, self.sv, self.loader)
+                row.layers_tab = self
                 self.comet_rows.append(row)
                 comet_inner_layout.addWidget(row)
 
@@ -1461,6 +1494,48 @@ class LayersTab(QWidget):
                     pass
         except Exception:
             pass
+        
+
+        # Restore H&E
+        try:
+            self._update_he()
+        except Exception:
+            pass
+        
+        # Restore proteins
+        for row in self.comet_rows:
+            try:
+                should_show = row.marker in self.active_proteins
+
+                row.vis_chk.blockSignals(True)
+                row.vis_chk.setChecked(should_show)
+                row.vis_chk.blockSignals(False)
+
+                row._on_change()
+            except Exception:
+                pass
+            
+        # Restore genes
+        for gene in self.active_genes:
+            try:
+                row = TranscriptChannelRow(
+                    gene,
+                    self.sv,
+                    self.loader,
+                )
+
+                row.layers_tab = self
+
+                if gene in self.active_gene_colors:
+                    row.color = self.active_gene_colors[gene]
+
+                row.vis_chk.setChecked(True)
+
+                row._on_change()
+
+            except Exception:
+                pass
+            
 
     def _update_he(self):
         core = self.core_combo.currentText()
@@ -1517,6 +1592,8 @@ class LayersTab(QWidget):
                 self.sv,
                 self.loader,
             )
+
+            row.layers_tab = self
 
             self.gene_rows_layout.addWidget(row)
 
