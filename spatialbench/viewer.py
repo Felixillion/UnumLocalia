@@ -265,81 +265,26 @@ class SpatialViewer:
 
         # Napari expects (row, col) == (y, x)
         yx = coords[:, ::-1] if coords.shape[1] == 2 else coords
-        is_visible = visible if (self._active_core is None or self._active_core == core) else False
 
         layer = self._viewer.add_points(
             yx,
             name=layer_name,
             face_color=color,
-            edge_color="transparent",
             size=size,
             opacity=opacity,
-            visible=is_visible,
-            blending="translucent",
+            visible=visible,
+            metadata={
+                "core": core,
+                "marker": gene,
+                "modality": "xenium",
+                "sb_source": f"transcripts::{gene}",
+            },
         )
 
-        layer.metadata.update({
-            "core": core,
-            "modality": "xenium",
-            "marker": gene,
-            "user_visible": visible
-        })
-
-        # If an authoritative affine was provided, coerce to 3x3, attach a Napari Affine,
-        # and persist the matrix in metadata. Be defensive about shapes and Napari versions.
         if affine is not None:
-            try:
-                M = np.asarray(affine, dtype=float).copy()
-                # Accept flattened arrays (6 or 9), 2x3, or 3x3
-                if M.ndim == 1:
-                    if M.size == 6:
-                        M = M.reshape(2, 3)
-                    elif M.size == 9:
-                        M = M.reshape(3, 3)
-                if M.shape == (2, 3):
-                    M = np.vstack([M, [0.0, 0.0, 1.0]])
-                # final guard: if still not 3x3, try reshape
-                if M.shape != (3, 3):
-                    try:
-                        M = M.reshape(3, 3)
-                    except Exception:
-                        raise ValueError("affine could not be coerced to 3x3")
-
-                # Construct Napari Affine using positional arg where possible
-                aff_obj = None
-                try:
-                    from napari.utils.transforms import Affine
-                    try:
-                        aff_obj = Affine(M)   # positional constructor is broadly supported
-                    except TypeError:
-                        # some versions accept keyword 'matrix'
-                        aff_obj = Affine(matrix=M)
-                except Exception:
-                    aff_obj = None
-
-                # Attach transform to layer using the most compatible attribute
-                if aff_obj is not None:
-                    try:
-                        layer.transform = aff_obj
-                    except Exception:
-                        try:
-                            layer.affine = aff_obj
-                        except Exception:
-                            pass
-
-                # Always persist the numeric matrix for diagnostics
-                try:
-                    layer.metadata = getattr(layer, "metadata", {}) or {}
-                    layer.metadata["affine_matrix"] = M.tolist()
-                except Exception:
-                    pass
-            except Exception:
-                # If anything fails, persist the raw array for inspection
-                try:
-                    layer.metadata = getattr(layer, "metadata", {}) or {}
-                    layer.metadata["affine_matrix"] = np.asarray(affine, dtype=float).tolist()
-                except Exception:
-                    pass
+            napari_affine = self._convert_affine(np.asarray(affine, dtype=float))
+            if napari_affine is not None:
+                layer.affine = napari_affine
 
         return layer
 

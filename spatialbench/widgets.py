@@ -957,14 +957,19 @@ class TranscriptChannelRow(QWidget):
         try:
             if M_h is not None:
                 H_pts = np.hstack([coords_mapped, np.ones((coords_mapped.shape[0], 1))])
-                coords_world = (H_pts @ np.asarray(M_h, dtype=float).T)[:, :2]
+                coords_world = coords_mapped
             else:
                 coords_world = coords_mapped.copy()
         except Exception:
             coords_world = coords_mapped.copy()
 
+
+        # Compute authoritative matrix M_h (COMET px -> viewer/world)
+        M_h = self._compute_authoritative_matrix(core)
+
         # Napari expects (row, col) ordering -> reverse x,y to y,x
-        pts_for_napari = coords_world[:, ::-1]
+        # pts_for_napari = coords_world[:, ::-1]
+        pts_for_napari = coords_world
 
 
 
@@ -1004,16 +1009,25 @@ class TranscriptChannelRow(QWidget):
 
 
         try:
-            created_layer = self.sv.add_transcript_layer(core, self.gene, pts_for_napari, self.color, True)
+            created_layer = self.sv.add_transcript_layer(core, self.gene, coords_world, self.color, True, affine=M_h)
         except Exception:
+            # fallback if viewer helper fails
             try:
-                created_layer = self.sv.viewer.add_points(pts_for_napari, name=layer_name, size=10, face_color=self.color, visible=True)
+                created_layer = self.sv.viewer.add_points(
+                    pts_for_napari[:, ::-1],  # manual (y,x) swap for napari
+                    name=layer_name,
+                    size=10,
+                    face_color=self.color,
+                    visible=True,
+                )
             except Exception as e:
-                logger.exception("Failed to add transcript layer for %s / %s: %s", core, self.gene, e)
+                logger.exception(
+                    "Failed to add transcript layer for %s / %s: %s",
+                    core,
+                    self.gene,
+                    e,
+                )
                 return
-
-        if created_layer is None:
-            return
 
 
 
