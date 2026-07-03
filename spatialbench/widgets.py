@@ -60,9 +60,10 @@ def _clear_layout(widget: QtWidgets.QWidget) -> None:
 class CollapsibleGroup(QGroupBox):
     def __init__(self, title: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(title, parent)
-        self.setCheckable(True)
-        self.setChecked(True)
-        self.toggled.connect(self._on_toggle)
+        # Have tick box for sections
+        # self.setCheckable(True)
+        # self.setChecked(True)
+        # self.toggled.connect(self._on_toggle)
 
     def _on_toggle(self, checked: bool) -> None:
         for child in self.findChildren(QWidget):
@@ -402,7 +403,8 @@ class TranscriptChannelRow(QWidget):
         row.setSpacing(4)
 
         self.vis_chk = QCheckBox(gene)
-        self.vis_chk.setFixedWidth(200)
+        self.vis_chk.setMinimumWidth(100)
+        self.vis_chk.setMaximumWidth(150)
         self.vis_chk.setChecked(False)
         self.vis_chk.toggled.connect(self._on_change)
         row.addWidget(self.vis_chk)
@@ -412,7 +414,8 @@ class TranscriptChannelRow(QWidget):
         self.color_btn.setFixedWidth(30)
         self.color_btn.clicked.connect(self._pick_color)
         row.addWidget(self.color_btn)
-        row.addStretch()
+        row.addSpacing(10)
+        row.setAlignment(Qt.AlignLeft)
         self.setLayout(row)
 
     def _pick_color(self):
@@ -1074,9 +1077,16 @@ class LayersTab(QWidget):
         # 4. Scrollable Markers
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+
         self.scroll_content = QWidget()
+
         self.scroll_layout = QVBoxLayout(self.scroll_content)
+
+        self.scroll_layout.setContentsMargins(0, 0, 0, 0)
+        self.scroll_layout.setSpacing(4)
+
         scroll.setWidget(self.scroll_content)
+
         layout.addWidget(scroll)
 
     def _on_tx_size_changed(self, v):
@@ -1119,32 +1129,87 @@ class LayersTab(QWidget):
         self.comet_rows = []
         self.gene_rows = []
 
+        # --- CELL MASKS ---
+        # Add Cell Mask control row (single global row that operates on active core)
+        mask_group = CollapsibleGroup("Cell Masks")
+        mask_layout = QVBoxLayout(mask_group)
+
+        self.mask_row = CellMaskRow(self.sv, loader)
+
+        mask_layout.addWidget(self.mask_row)
+
+        mask_layout.setContentsMargins(6, 6, 6, 6)
+
+        self.scroll_layout.addWidget(mask_group)
+
+        # --- COMET PROTEINS ---
         # COMET controls
         if loader.proteins:
-            lbl = QLabel("COMET Proteins")
-            lbl.setFont(QFont("", 9, QFont.Bold))
-            self.scroll_layout.addWidget(lbl)
+            comet_group = CollapsibleGroup("COMET Proteins")
+            comet_layout = QVBoxLayout(comet_group)
+            comet_group.setFont(QFont("", 9, QFont.Bold))
 
             for p in loader.proteins:
                 row = CometChannelRow(p, self.sv, self.loader)
                 self.comet_rows.append(row)
-                self.scroll_layout.addWidget(row)
+                comet_layout.addWidget(row)
 
+            self.scroll_layout.addWidget(comet_group)
+            comet_layout.setContentsMargins(6, 6, 6, 6)
+
+        # --- XENIUM GENES ---
         # Gene controls
         if loader.genes:
-            lbl2 = QLabel("Xenium Genes")
-            lbl2.setFont(QFont("", 9, QFont.Bold))
-            lbl2.setStyleSheet("margin-top: 10px;")
-            self.scroll_layout.addWidget(lbl2)
+            gene_group = CollapsibleGroup("Xenium Genes")
+            gene_layout = QVBoxLayout(gene_group)
+            gene_group.setFont(QFont("", 9, QFont.Bold))
+            gene_group.setStyleSheet("margin-top: 10px;")
 
-            for g in loader.genes:
-                row = TranscriptChannelRow(g, self.sv, self.loader)
-                self.gene_rows.append(row)
-                self.scroll_layout.addWidget(row)
+            # Search box
+            search_layout = QHBoxLayout()
 
-        # Add Cell Mask control row (single global row that operates on active core)
-        self.mask_row = CellMaskRow(self.sv, loader)
-        self.scroll_layout.addWidget(self.mask_row)
+            self.gene_search = QLineEdit()
+            self.gene_search.setPlaceholderText("Search genes...")
+            self.gene_search.textChanged.connect(self._filter_genes)
+
+            self.gene_clear_btn = QPushButton("✕")
+            self.gene_clear_btn.setFixedWidth(30)
+            self.gene_clear_btn.clicked.connect(self.gene_search.clear)
+
+            search_layout.addWidget(self.gene_search)
+            search_layout.addWidget(self.gene_clear_btn)
+
+            gene_layout.addLayout(search_layout)
+
+            self.gene_count_label = QLabel()
+            gene_layout.addWidget(self.gene_count_label)
+
+            self.gene_limit_label = QLabel()
+            gene_layout.addWidget(self.gene_limit_label)
+
+            # Unselect genes
+            self.clear_gene_layers_btn = QPushButton("Unselect All Genes")
+            self.clear_gene_layers_btn.clicked.connect(
+                self._unselect_all_genes
+            )
+
+            gene_layout.addWidget(self.clear_gene_layers_btn)
+
+            # Store full gene list
+            self.all_genes = sorted(loader.genes)
+
+            # Container where matching rows will appear
+            self.gene_rows_widget = QWidget()
+            self.gene_rows_layout = QVBoxLayout(self.gene_rows_widget)
+
+            gene_layout.addWidget(self.gene_rows_widget)
+
+            gene_layout.setContentsMargins(6, 6, 6, 6)
+
+            # Populate initial view
+            self._filter_genes("")
+
+            self.scroll_layout.addWidget(gene_group)
 
         self.scroll_layout.addStretch()
 
@@ -1155,6 +1220,15 @@ class LayersTab(QWidget):
         self.core_combo.setCurrentText(cores[0])
         self._on_core_swapped(cores[0])
         self.sv.reset_view()
+
+    def _clear_qt_layout(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
+
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
 
     def _adjust_matrix(self, M_raw: Optional[np.ndarray], core_id: str) -> Optional[np.ndarray]:
         """Subtract the core's reference translation from the matrix so images stay centered."""
@@ -1382,6 +1456,66 @@ class LayersTab(QWidget):
                 layer.opacity = self.he_op.value() / 100.0
         except Exception:
             pass
+
+    # Filter genes for searching
+    def _filter_genes(self, text):
+        """
+        Live gene filtering.
+
+        Creates widgets only for matching genes instead of
+        making thousands of widgets visible/invisible.
+        """
+
+        text = text.strip().lower()
+
+        matches = [
+            g
+            for g in self.all_genes
+            if text in g.lower()
+        ]
+
+        self.gene_count_label.setText(
+            f"Showing {len(matches)} / {len(self.all_genes)} genes"
+        )
+
+        if len(matches) > 100:
+            self.gene_limit_label.setText(
+                "Refine search to view more genes"
+            )
+        else:
+            self.gene_limit_label.setText("")
+
+        self.gene_rows_widget.setUpdatesEnabled(False)
+
+        self._clear_qt_layout(self.gene_rows_layout)
+
+        # Prevent huge result sets from generating thousands of widgets
+        MAX_VISIBLE_ROWS = 50
+
+        for gene in matches[:MAX_VISIBLE_ROWS]:
+            row = TranscriptChannelRow(
+                gene,
+                self.sv,
+                self.loader,
+            )
+
+            self.gene_rows_layout.addWidget(row)
+
+        self.gene_rows_widget.setUpdatesEnabled(True)
+
+        self.scroll_content.update()
+
+    # Unselect all genes
+    def _unselect_all_genes(self):
+        self._remove_all_transcript_layers()
+
+        for row in self.gene_rows_layout.parent().findChildren(
+            TranscriptChannelRow
+        ):
+            try:
+                row.vis_chk.setChecked(False)
+            except Exception:
+                pass
 
 
 # Minimal helper tabs (kept for completeness)
