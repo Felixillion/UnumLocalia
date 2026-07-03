@@ -570,6 +570,12 @@ class TranscriptChannelRow(QWidget):
             if a_img is not None and hasattr(a_img, "matrix"):
                 try:
                     arr = np.asarray(a_img.matrix, dtype=float)
+
+
+                    self._debug_print("IMG_TRANSFORM_DBG:", core, "arr_shape", getattr(arr, "shape", None), "arr", arr.tolist(), "img_layer_shape", getattr(img_layer, "data", getattr(img_layer, "shape", None)))
+
+
+
                     # Accept common shapes: (3,3), (2,3), flattened 6 or 9
                     if arr.ndim == 2 and arr.shape == (3, 3):
                         M_h = arr
@@ -790,6 +796,35 @@ class TranscriptChannelRow(QWidget):
 
 
 
+
+            # DEBUG: widget sees mapped coords and exported matrix
+        try:
+            import os, numpy as _np
+            if os.environ.get("SPATIALBENCH_DEBUG"):
+                print("WIDGET_DBG: coords_mapped_sample", coords_mapped[:5].tolist(), flush=True)
+                print("WIDGET_DBG: exported_matrix_M_e", _np.asarray(M_exported if 'M_exported' in locals() else self.loader.alignment_matrices_comet_raw.get(core)).tolist(), flush=True)
+        except Exception:
+            pass
+        
+
+
+
+        # WIDGET DEBUG: confirm coords_mapped and matrix used
+        try:
+            import os, numpy as _np
+            if os.environ.get("SPATIALBENCH_DEBUG"):
+                print("WIDGET_DBG: core", core, "coords_mapped_sample:", coords_mapped[:5].tolist(), flush=True)
+                # show which matrix branch was used (fitted vs exported)
+                if 'M_f' in locals():
+                    print("WIDGET_DBG: used_fitted_matrix:", _np.asarray(M_f).tolist(), flush=True)
+                if 'M_e' in locals():
+                    print("WIDGET_DBG: used_exported_matrix:", _np.asarray(M_e).tolist(), flush=True)
+        except Exception:
+            pass
+
+
+
+
         # DEBUG: inspect exported-matrix branch internals (paste immediately after coords_mapped is set)
         try:
             import numpy as _np
@@ -857,8 +892,6 @@ class TranscriptChannelRow(QWidget):
                     coords_mapped = (coords_mapped - center) * suggested_scale + center
         except Exception:
             pass
-        
-
 
 
         # --- Choose authoritative 3x3 COMET->viewer matrix (M_h) for diagnostics ---
@@ -930,16 +963,48 @@ class TranscriptChannelRow(QWidget):
         except Exception:
             coords_world = coords_mapped.copy()
 
-
-        
-
-
-
         # Napari expects (row, col) ordering -> reverse x,y to y,x
         pts_for_napari = coords_world[:, ::-1]
 
+
+
+        # DEBUG: final transform and points passed to Napari
         try:
-            created_layer = self.sv.add_transcript_layer(core, self.gene, coords_world, self.color, True)
+            import os, numpy as _np
+            if os.environ.get("SPATIALBENCH_DEBUG"):
+                # M_img is the Napari image-layer matrix if available; M_h is the authoritative matrix computed earlier
+                print("FINAL_DBG: M_img", None if 'M_img' not in locals() else (_np.asarray(M_img).tolist()), flush=True)
+                print("FINAL_DBG: M_h", None if 'M_h' not in locals() else (_np.asarray(M_h).tolist()), flush=True)
+                # sample of points passed to viewer (either coords_mapped or pts_for_napari / pts_world)
+                if 'pts_for_napari' in locals():
+                    print("FINAL_DBG: pts_for_napari_sample", pts_for_napari[:5].tolist(), flush=True)
+                elif 'coords_mapped' in locals():
+                    print("FINAL_DBG: coords_mapped_sample", coords_mapped[:5].tolist(), flush=True)
+                elif 'pts_world' in locals():
+                    print("FINAL_DBG: pts_world_sample", pts_world[:5].tolist(), flush=True)
+        except Exception:
+            pass
+
+
+
+        # WIDGET DEBUG: final points and candidate affines
+        try:
+            import os, numpy as _np
+            if os.environ.get("SPATIALBENCH_DEBUG"):
+                print("FINAL_DBG: coords_mapped[:5]", coords_mapped[:5].tolist(), flush=True)
+                # M_h is the authoritative 3x3 matrix computed by _compute_authoritative_matrix
+                print("FINAL_DBG: M_h", None if 'M_h' not in locals() else _np.asarray(M_h).tolist(), flush=True)
+                # M_img is the Napari image-layer matrix if discovered
+                print("FINAL_DBG: M_img", None if 'M_img' not in locals() else _np.asarray(M_img).tolist(), flush=True)
+        except Exception:
+            pass
+
+
+
+
+
+        try:
+            created_layer = self.sv.add_transcript_layer(core, self.gene, pts_for_napari, self.color, True)
         except Exception:
             try:
                 created_layer = self.sv.viewer.add_points(pts_for_napari, name=layer_name, size=10, face_color=self.color, visible=True)
@@ -949,6 +1014,23 @@ class TranscriptChannelRow(QWidget):
 
         if created_layer is None:
             return
+
+
+
+        # WIDGET DEBUG: layer metadata after creation
+        try:
+            import os, numpy as _np
+            if os.environ.get("SPATIALBENCH_DEBUG"):
+                try:
+                    meta = getattr(created_layer, "metadata", {}) or {}
+                    print("FINAL_DBG: created_layer.metadata.affine_matrix", meta.get("affine_matrix"), flush=True)
+                except Exception:
+                    print("FINAL_DBG: created_layer metadata unavailable", flush=True)
+        except Exception:
+            pass
+
+
+
 
         # Persist the authoritative matrix for diagnostics
         try:

@@ -344,6 +344,21 @@ class DatasetLoader:
                 except Exception as e:
                     logger.warning("Failed to read Xenium transcripts metadata for %s: %s", core_id, e)
 
+
+
+            # IO DEBUG: transcripts loaded summary
+            try:
+                import os
+                if os.environ.get("SPATIALBENCH_DEBUG"):
+                    print("IO_DBG: transcripts for", core_id, "rows:", len(df_tx), "columns:", list(df_tx.columns)[:8], flush=True)
+            except Exception:
+                pass
+
+
+
+
+
+
             if load_boundaries:
                 if core.cell_boundaries:
                     self.cell_boundaries_df[core_id] = safe_read_parquet(core.cell_boundaries)
@@ -360,6 +375,19 @@ class DatasetLoader:
                     self.alignment_matrices_comet[core_id] = normalize_affine_matrix(M_raw)
                 except Exception as e:
                     logger.warning("Failed to load COMET alignment for %s: %s", core_id, e)
+
+
+                # IO DEBUG: show loaded COMET alignment matrices for diagnostics
+                try:
+                    import os, numpy as _np
+                    if os.environ.get("SPATIALBENCH_DEBUG"):
+                        print("IO_DBG: core", core_id, "M_comet_raw:", _np.asarray(M_raw).tolist(), flush=True)
+                        print("IO_DBG: core", core_id, "M_comet_normalized:", _np.asarray(self.alignment_matrices_comet[core_id]).tolist(), flush=True)
+                except Exception:
+                    pass
+
+
+
 
             # H&E alignment
             if core.alignment_he:
@@ -652,6 +680,20 @@ class DatasetLoader:
         rms = np.sqrt(((mapped - dst)**2).sum(axis=1)).mean()
         self.transcript_affine_by_core[core_id] = A
         logger.info("Fitted transcript affine for %s from GeoJSON (matches=%d, rms=%.2f px)", core_id, len(src), rms)
+
+
+
+        # IO DEBUG: fitted transcript affine (Xenium µm -> COMET px)
+        try:
+            import os, numpy as _np
+            if os.environ.get("SPATIALBENCH_DEBUG"):
+                print("IO_DBG: fitted_affine_core", core_id, "A:", _np.asarray(A).tolist(), "rms:", float(rms), flush=True)
+        except Exception:
+            pass
+
+
+
+
 
     # -----------------------
     # Robust COMET channel loader (handles zarr versions)
