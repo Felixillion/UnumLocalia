@@ -857,6 +857,8 @@ class TranscriptChannelRow(QWidget):
                     coords_mapped = (coords_mapped - center) * suggested_scale + center
         except Exception:
             pass
+        
+
 
 
         # --- Choose authoritative 3x3 COMET->viewer matrix (M_h) for diagnostics ---
@@ -928,11 +930,16 @@ class TranscriptChannelRow(QWidget):
         except Exception:
             coords_world = coords_mapped.copy()
 
+
+        
+
+
+
         # Napari expects (row, col) ordering -> reverse x,y to y,x
         pts_for_napari = coords_world[:, ::-1]
 
         try:
-            created_layer = self.sv.add_transcript_layer(core, self.gene, pts_for_napari, self.color, True)
+            created_layer = self.sv.add_transcript_layer(core, self.gene, coords_world, self.color, True)
         except Exception:
             try:
                 created_layer = self.sv.viewer.add_points(pts_for_napari, name=layer_name, size=10, face_color=self.color, visible=True)
