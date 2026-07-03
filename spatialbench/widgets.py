@@ -1061,20 +1061,7 @@ class LayersTab(QWidget):
         he_layout.addRow("Opacity", self.he_op)
         layout.addWidget(self.he_group)
 
-        # 3. Transcript Size Global
-        tx_size_layout = QHBoxLayout()
-        tx_size_layout.addWidget(QLabel("Global Dot Size:"))
-        self.tx_size = QDoubleSpinBox()
-        self.tx_size.setRange(1.0, 100.0)
-        self.tx_size.setValue(25.0)
-        self.tx_size.setSingleStep(1.0)
-        # connect to handler that updates viewer and existing layers
-        self.tx_size.valueChanged.connect(self._on_tx_size_changed)
-        tx_size_layout.addWidget(self.tx_size)
-        tx_size_layout.addStretch()
-        layout.addLayout(tx_size_layout)
-
-        # 4. Scrollable Markers
+        # 3. Scrollable Markers
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
 
@@ -1147,12 +1134,23 @@ class LayersTab(QWidget):
         if loader.proteins:
             comet_group = CollapsibleGroup("COMET Proteins")
             comet_layout = QVBoxLayout(comet_group)
+            
+            comet_scroll = QScrollArea()
+            comet_scroll.setWidgetResizable(True)
+
+            comet_widget = QWidget()
+            comet_inner_layout = QVBoxLayout(comet_widget)
+
+            comet_scroll.setWidget(comet_widget)
+
+            comet_layout.addWidget(comet_scroll)
+
             comet_group.setFont(QFont("", 9, QFont.Bold))
 
             for p in loader.proteins:
                 row = CometChannelRow(p, self.sv, self.loader)
                 self.comet_rows.append(row)
-                comet_layout.addWidget(row)
+                comet_inner_layout.addWidget(row)
 
             self.scroll_layout.addWidget(comet_group)
             comet_layout.setContentsMargins(6, 6, 6, 6)
@@ -1187,6 +1185,21 @@ class LayersTab(QWidget):
             self.gene_limit_label = QLabel()
             gene_layout.addWidget(self.gene_limit_label)
 
+            # Gene dot sizes
+            tx_size_layout = QHBoxLayout()
+
+            tx_size_layout.addWidget(QLabel("Global Dot Size"))
+
+            self.tx_size = QDoubleSpinBox()
+            self.tx_size.setRange(1.0, 100.0)
+            self.tx_size.setValue(25.0)
+            self.tx_size.setSingleStep(1.0)
+            self.tx_size.valueChanged.connect(self._on_tx_size_changed)
+
+            tx_size_layout.addWidget(self.tx_size)
+
+            gene_layout.addLayout(tx_size_layout)
+
             # Unselect genes
             self.clear_gene_layers_btn = QPushButton("Unselect All Genes")
             self.clear_gene_layers_btn.clicked.connect(
@@ -1199,10 +1212,16 @@ class LayersTab(QWidget):
             self.all_genes = sorted(loader.genes)
 
             # Container where matching rows will appear
+            gene_scroll = QScrollArea()
+            gene_scroll.setWidgetResizable(True)
+            gene_scroll.setMinimumHeight(250)
+
             self.gene_rows_widget = QWidget()
             self.gene_rows_layout = QVBoxLayout(self.gene_rows_widget)
 
-            gene_layout.addWidget(self.gene_rows_widget)
+            gene_scroll.setWidget(self.gene_rows_widget)
+
+            gene_layout.addWidget(gene_scroll)
 
             gene_layout.setContentsMargins(6, 6, 6, 6)
 
