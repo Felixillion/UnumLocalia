@@ -344,21 +344,6 @@ class DatasetLoader:
                 except Exception as e:
                     logger.warning("Failed to read Xenium transcripts metadata for %s: %s", core_id, e)
 
-
-
-            # IO DEBUG: transcripts loaded summary
-            try:
-                import os
-                if os.environ.get("SPATIALBENCH_DEBUG"):
-                    print("IO_DBG: transcripts for", core_id, "rows:", len(df_tx), "columns:", list(df_tx.columns)[:8], flush=True)
-            except Exception:
-                pass
-
-
-
-
-
-
             if load_boundaries:
                 if core.cell_boundaries:
                     self.cell_boundaries_df[core_id] = safe_read_parquet(core.cell_boundaries)
@@ -375,19 +360,6 @@ class DatasetLoader:
                     self.alignment_matrices_comet[core_id] = normalize_affine_matrix(M_raw)
                 except Exception as e:
                     logger.warning("Failed to load COMET alignment for %s: %s", core_id, e)
-
-
-                # IO DEBUG: show loaded COMET alignment matrices for diagnostics
-                try:
-                    import os, numpy as _np
-                    if os.environ.get("SPATIALBENCH_DEBUG"):
-                        print("IO_DBG: core", core_id, "M_comet_raw:", _np.asarray(M_raw).tolist(), flush=True)
-                        print("IO_DBG: core", core_id, "M_comet_normalized:", _np.asarray(self.alignment_matrices_comet[core_id]).tolist(), flush=True)
-                except Exception:
-                    pass
-
-
-
 
             # H&E alignment
             if core.alignment_he:
@@ -491,34 +463,6 @@ class DatasetLoader:
                                         px_um = float(phys_x)
                                         if self.xenium_pixel_size_um is None:
                                             self.xenium_pixel_size_um = px_um
-
-                                        # --- DEBUG: record where xenium_pixel_size_um is coming from ---
-                                        try:
-                                            import traceback, os, json
-                                            src = None
-                                            # try to capture a manifest path or source if available in local vars
-                                            if 'manifest_entry' in locals():
-                                                try:
-                                                    src = getattr(manifest_entry, "path", None) or getattr(manifest_entry, "filename", None)
-                                                except Exception:
-                                                    src = None
-                                            # fallback: try to inspect any nearby variables that look like a path
-                                            if src is None:
-                                                for name in ("path", "filename", "file", "xml_path", "ome_xml"):
-                                                    if name in locals():
-                                                        try:
-                                                            v = locals()[name]
-                                                            if isinstance(v, str) and os.path.exists(v):
-                                                                src = v
-                                                                break
-                                                        except Exception:
-                                                            pass
-                                            print("PXDBG: setting loader.xenium_pixel_size_um ->", px_um, " (detected source:", src, ")", flush=True)
-                                            # print a short stack trace so we can see who invoked this code
-                                            for line in traceback.format_stack()[-6:]:
-                                                print("PXDBG:   " + line.strip(), flush=True)
-                                        except Exception as _pxdbg_e:
-                                            print("PXDBG: debug print failed:", _pxdbg_e, flush=True)
 
                                         # actual assignment (unchanged)
                                         self.xenium_pixel_size_um = px_um
@@ -680,19 +624,6 @@ class DatasetLoader:
         rms = np.sqrt(((mapped - dst)**2).sum(axis=1)).mean()
         self.transcript_affine_by_core[core_id] = A
         logger.info("Fitted transcript affine for %s from GeoJSON (matches=%d, rms=%.2f px)", core_id, len(src), rms)
-
-
-
-        # IO DEBUG: fitted transcript affine (Xenium µm -> COMET px)
-        try:
-            import os, numpy as _np
-            if os.environ.get("SPATIALBENCH_DEBUG"):
-                print("IO_DBG: fitted_affine_core", core_id, "A:", _np.asarray(A).tolist(), "rms:", float(rms), flush=True)
-        except Exception:
-            pass
-
-
-
 
 
     # -----------------------

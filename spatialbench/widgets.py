@@ -415,19 +415,6 @@ class TranscriptChannelRow(QWidget):
         row.addStretch()
         self.setLayout(row)
 
-    # Backwards-compatible debug helpers (both names supported)
-    def _debug(self, *args):
-        try:
-            import os
-            if os.environ.get("SPATIALBENCH_DEBUG"):
-                print("TRANSCRIPT_DBG:", *args, flush=True)
-        except Exception:
-            pass
-
-    def _debug_print(self, *args):
-        # keep the older name used elsewhere; delegate to _debug
-        self._debug(*args)
-
     def _pick_color(self):
         c = QColorDialog.getColor()
         if c.isValid():
@@ -570,11 +557,6 @@ class TranscriptChannelRow(QWidget):
             if a_img is not None and hasattr(a_img, "matrix"):
                 try:
                     arr = np.asarray(a_img.matrix, dtype=float)
-
-
-                    self._debug_print("IMG_TRANSFORM_DBG:", core, "arr_shape", getattr(arr, "shape", None), "arr", arr.tolist(), "img_layer_shape", getattr(img_layer, "data", getattr(img_layer, "shape", None)))
-
-
 
                     # Accept common shapes: (3,3), (2,3), flattened 6 or 9
                     if arr.ndim == 2 and arr.shape == (3, 3):
@@ -773,15 +755,6 @@ class TranscriptChannelRow(QWidget):
                     if M_e.shape == (2, 3):
                         M_e = np.vstack([M_e, [0.0, 0.0, 1.0]])
 
-                    
-                    # DEBUG: show pixel size and raw coords used by the widget
-                    try:
-                        print("DBG_PX: widget px_um:", getattr(self.loader, "xenium_pixel_size_um", None))
-                        print("DBG_PX: coords raw sample (first 5) [X,Y]:", coords[:5].tolist())
-                    except Exception as _e:
-                        print("DBG_PX: failed to print px_um/coords:", _e)
-
-
                     coords_pix = coords / px_um
                     H = np.hstack([coords_pix, np.ones((coords_pix.shape[0], 1))])
                     try:
@@ -792,84 +765,6 @@ class TranscriptChannelRow(QWidget):
                     coords_mapped = coords / (self.loader.xenium_pixel_size_um or 0.2125)
         except Exception:
             coords_mapped = coords.copy()
-
-
-
-
-
-            # DEBUG: widget sees mapped coords and exported matrix
-        try:
-            import os, numpy as _np
-            if os.environ.get("SPATIALBENCH_DEBUG"):
-                print("WIDGET_DBG: coords_mapped_sample", coords_mapped[:5].tolist(), flush=True)
-                print("WIDGET_DBG: exported_matrix_M_e", _np.asarray(M_exported if 'M_exported' in locals() else self.loader.alignment_matrices_comet_raw.get(core)).tolist(), flush=True)
-        except Exception:
-            pass
-        
-
-
-
-        # WIDGET DEBUG: confirm coords_mapped and matrix used
-        try:
-            import os, numpy as _np
-            if os.environ.get("SPATIALBENCH_DEBUG"):
-                print("WIDGET_DBG: core", core, "coords_mapped_sample:", coords_mapped[:5].tolist(), flush=True)
-                # show which matrix branch was used (fitted vs exported)
-                if 'M_f' in locals():
-                    print("WIDGET_DBG: used_fitted_matrix:", _np.asarray(M_f).tolist(), flush=True)
-                if 'M_e' in locals():
-                    print("WIDGET_DBG: used_exported_matrix:", _np.asarray(M_e).tolist(), flush=True)
-        except Exception:
-            pass
-
-
-
-
-        # DEBUG: inspect exported-matrix branch internals (paste immediately after coords_mapped is set)
-        try:
-            import numpy as _np
-            # coords_pix and H should be in scope where coords_mapped was computed
-            print("DBG_INT: coords_pix sample:", None if 'coords_pix' not in locals() else _np.asarray(coords_pix)[:5].tolist())
-            if 'M_e' in locals() and M_e is not None:
-                Me = _np.asarray(M_e, dtype=float)
-                print("DBG_INT: M_e shape:", Me.shape)
-                print("DBG_INT: M_e (first 3x3):", Me.reshape(3,3).tolist() if Me.size in (6,9) or Me.shape==(3,3) else Me.tolist())
-                try:
-                    Minv = _np.linalg.inv(Me)
-                    print("DBG_INT: M_inv (first 3x3):", Minv[:3,:3].tolist())
-                except Exception as _e:
-                    print("DBG_INT: M_inv compute failed:", _e)
-            else:
-                print("DBG_INT: no M_e in locals or M_e is None")
-            print("DBG_INT: coords_mapped (widget) sample:", _np.asarray(coords_mapped)[:5].tolist())
-            # Compare to the exported-inverse mapping computed in REPL (if you ran it earlier)
-            try:
-                coords_by_export_inv_local = (H @ _np.linalg.inv(Me).T)[:, :2]
-                print("DBG_INT: coords_by_export_inv sample:", coords_by_export_inv_local[:5].tolist())
-                print("DBG_INT: coords_mapped equals exported-inv (allclose):", _np.allclose(_np.asarray(coords_mapped)[:5], coords_by_export_inv_local[:5], atol=1e-6))
-            except Exception as _e:
-                print("DBG_INT: compare to exported-inv failed:", _e)
-        except Exception as _e:
-            print("DBG_INT: debug block failed:", _e)
-
-
-
-        # --- DEBUG: record which mapping branch and the matrix used ---
-        try:
-            import numpy as _np
-            used_exported = 'M_e' in locals() and ('M_inv' in locals() or ('M_e' in locals() and M_e is not None))
-            used_fitted = 'M_use' in locals() and (M_use is not None)
-            used_micron2px = not (used_exported or used_fitted)
-            print("DBG_CHOICE: used_exported_inv:", bool(used_exported))
-            print("DBG_CHOICE: used_fitted:", bool(used_fitted))
-            print("DBG_CHOICE: used_micron2px:", bool(used_micron2px))
-            print("DBG_CHOICE: M_e (exported) shape/vals:", None if 'M_e' not in locals() or M_e is None else _np.asarray(M_e, dtype=float).shape, None if 'M_e' not in locals() or M_e is None else _np.asarray(M_e, dtype=float).tolist()[:9])
-            print("DBG_CHOICE: M_use (fitted) shape/vals:", None if 'M_use' not in locals() or M_use is None else _np.asarray(M_use, dtype=float).shape, None if 'M_use' not in locals() or M_use is None else _np.asarray(M_use, dtype=float).tolist()[:9])
-            print("DBG_CHOICE: coords_mapped sample (first 5):", coords_mapped[:5].tolist())
-        except Exception as _dbg_e:
-            print("DBG_CHOICE: debug print failed:", _dbg_e)
-
-
 
 
         # --- Autoscale guard: prevent upscaling transcript cloud (only allow shrinking) ---
@@ -947,9 +842,6 @@ class TranscriptChannelRow(QWidget):
         except Exception:
             M_h = None
 
-        self._debug_print("core", core, "coords_mapped[:3]", coords_mapped[:3].tolist() if coords_mapped.size else None)
-        self._debug_print("img_layer present", img_layer is not None, "M_h present", M_h is not None)
-
         # Remove any existing layer first to avoid duplicates
         self._remove_layer_by_name(layer_name)
 
@@ -972,42 +864,6 @@ class TranscriptChannelRow(QWidget):
         pts_for_napari = coords_world
 
 
-
-        # DEBUG: final transform and points passed to Napari
-        try:
-            import os, numpy as _np
-            if os.environ.get("SPATIALBENCH_DEBUG"):
-                # M_img is the Napari image-layer matrix if available; M_h is the authoritative matrix computed earlier
-                print("FINAL_DBG: M_img", None if 'M_img' not in locals() else (_np.asarray(M_img).tolist()), flush=True)
-                print("FINAL_DBG: M_h", None if 'M_h' not in locals() else (_np.asarray(M_h).tolist()), flush=True)
-                # sample of points passed to viewer (either coords_mapped or pts_for_napari / pts_world)
-                if 'pts_for_napari' in locals():
-                    print("FINAL_DBG: pts_for_napari_sample", pts_for_napari[:5].tolist(), flush=True)
-                elif 'coords_mapped' in locals():
-                    print("FINAL_DBG: coords_mapped_sample", coords_mapped[:5].tolist(), flush=True)
-                elif 'pts_world' in locals():
-                    print("FINAL_DBG: pts_world_sample", pts_world[:5].tolist(), flush=True)
-        except Exception:
-            pass
-
-
-
-        # WIDGET DEBUG: final points and candidate affines
-        try:
-            import os, numpy as _np
-            if os.environ.get("SPATIALBENCH_DEBUG"):
-                print("FINAL_DBG: coords_mapped[:5]", coords_mapped[:5].tolist(), flush=True)
-                # M_h is the authoritative 3x3 matrix computed by _compute_authoritative_matrix
-                print("FINAL_DBG: M_h", None if 'M_h' not in locals() else _np.asarray(M_h).tolist(), flush=True)
-                # M_img is the Napari image-layer matrix if discovered
-                print("FINAL_DBG: M_img", None if 'M_img' not in locals() else _np.asarray(M_img).tolist(), flush=True)
-        except Exception:
-            pass
-
-
-
-
-
         try:
             created_layer = self.sv.add_transcript_layer(core, self.gene, coords_world, self.color, True, affine=M_h)
         except Exception:
@@ -1028,22 +884,6 @@ class TranscriptChannelRow(QWidget):
                     e,
                 )
                 return
-
-
-
-        # WIDGET DEBUG: layer metadata after creation
-        try:
-            import os, numpy as _np
-            if os.environ.get("SPATIALBENCH_DEBUG"):
-                try:
-                    meta = getattr(created_layer, "metadata", {}) or {}
-                    print("FINAL_DBG: created_layer.metadata.affine_matrix", meta.get("affine_matrix"), flush=True)
-                except Exception:
-                    print("FINAL_DBG: created_layer metadata unavailable", flush=True)
-        except Exception:
-            pass
-
-
 
 
         # Persist the authoritative matrix for diagnostics
@@ -1123,15 +963,6 @@ class TranscriptChannelRow(QWidget):
                 self.sv.reset_view()
         except Exception:
             pass
-
-
-
-
-
-
-
-
-
 
 
 class DataTab(QWidget):
