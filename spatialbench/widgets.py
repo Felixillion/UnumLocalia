@@ -72,7 +72,7 @@ class CollapsibleGroup(QGroupBox):
 
 
 # ---------- Cell mask class ----------
-class CellMaskRow(QWidget):
+class CellBoundaryRow(QWidget):
     """
     Minimal cell-mask control: checkbox + info label.
     Loads rasterized mask synchronously via loader.load_geojson_mask(core).
@@ -87,7 +87,7 @@ class CellMaskRow(QWidget):
         row.setContentsMargins(0, 2, 0, 2)
         row.setSpacing(6)
 
-        self.chk = QCheckBox("Cell masks")
+        self.chk = QCheckBox("Cell boundaries")
         self.chk.setChecked(False)
         self.chk.toggled.connect(self._on_toggle)
         row.addWidget(self.chk)
@@ -107,10 +107,12 @@ class CellMaskRow(QWidget):
             return
 
         self.chk.setEnabled(True)
-        lname = f"{core}::cell_mask"
+        lname = f"{core}::cells"
         layer = None
         try:
-            layer = self.sv.viewer.layers.get(lname)
+            layer = self.sv._get_layer(
+                f"{core}::cells"
+            )
         except Exception:
             layer = None
 
@@ -119,7 +121,10 @@ class CellMaskRow(QWidget):
             self.chk.setChecked(bool(layer.visible))
             self.chk.blockSignals(False)
             meta = getattr(layer, "metadata", {}) or {}
-            nlabels = meta.get("n_labels")
+            if layer is not None:
+                self.info_lbl.setText(
+                    f"cells: {len(layer.data)}"
+                )
             if nlabels is not None:
                 self.info_lbl.setText(f"labels: {nlabels}")
             else:
@@ -130,140 +135,42 @@ class CellMaskRow(QWidget):
             self.chk.blockSignals(False)
             self.info_lbl.setText("")
 
+
     def _on_toggle(self, checked: bool):
+
         core = getattr(self.sv, "active_core", None)
+
         if not core:
             return
 
-        lname = f"{core}::cell_mask"
+        layer_name = f"{core}::cells"
 
-        # turning off: hide if present
-        if not checked:
-            try:
-                layer = self.sv.viewer.layers.get(lname)
-            except Exception:
-                layer = None
-            if layer is not None:
-                try:
-                    layer.visible = False
-                except Exception:
-                    pass
+        print("LOOKING FOR:", layer_name)
+
+        print("AVAILABLE LAYERS:")
+
+        for layer in self.sv.viewer.layers:
+            print("   ", layer.name)
+
+        layer = None
+
+        for l in self.sv.viewer.layers:
+            if getattr(l, "name", None) == layer_name:
+                layer = l
+                break
+
+        if layer is None:
+            self.info_lbl.setText("no boundaries")
             return
 
-        # turning on: load mask and add labels layer
-        try:
-            self.info_lbl.setText("loading masks...")
-            QApplication.processEvents()
-        except Exception:
-            pass
+        layer.visible = checked
 
-        try:
-            mask, id_map = self.loader.load_geojson_mask(core, overwrite=False)
-        except Exception as e:
-            logger.exception("Failed to load geojson mask for %s: %s", core, e)
-            self.chk.blockSignals(True)
-            self.chk.setChecked(False)
-            self.chk.blockSignals(False)
-            self.info_lbl.setText("mask load failed")
-            return
+        if hasattr(self, "layers_tab"):
+            self.layers_tab.cell_boundaries_visible = checked
 
-        if mask is None:
-            self.info_lbl.setText("no mask")
-            self.chk.blockSignals(True)
-            self.chk.setChecked(False)
-            self.chk.blockSignals(False)
-            return
-
-        try:
-            try:
-                # Prefer normalized (translation-zeroed) COMET matrix if present, else raw
-                M_com_raw = None
-                try:
-                    M_com_raw = self.loader.alignment_matrices_comet.get(core)
-                except Exception:
-                    M_com_raw = None
-                if M_com_raw is None:
-                    try:
-                        M_com_raw = self.loader.alignment_matrices_comet_raw.get(core)
-                    except Exception:
-                        M_com_raw = None
-
-                # Convert to viewer / napari affine if helper exists
-                M_for_viewer = None
-                if M_com_raw is not None and hasattr(self.sv, "_convert_affine"):
-                    try:
-                        M_for_viewer = self.sv._convert_affine(M_com_raw)
-                    except Exception:
-                        M_for_viewer = None
-
-                # If no conversion helper, try to coerce a 2x3 affine for napari
-                if M_for_viewer is None and M_com_raw is not None:
-                    try:
-                        M_arr = np.asarray(M_com_raw, dtype=float)
-                        if M_arr.shape == (3, 3):
-                            # napari accepts 3x3 or 2x3; convert to 2x3
-                            M_for_viewer = M_arr[:2, :]
-                        elif M_arr.shape == (2, 3):
-                            M_for_viewer = M_arr
-                        else:
-                            # try reshape fallback
-                            M_for_viewer = M_arr.reshape(3, 3)[:2, :]
-                    except Exception:
-                        M_for_viewer = None
-
-                # Optional: sanity-check shapes against COMET channel (if available)
-                try:
-                    # prefer channel 0 as reference; don't raise if missing
-                    if hasattr(self.loader, "get_comet_channel"):
-                        ref = None
-                        try:
-                            ref = self.loader.get_comet_channel(core, channel_index=0, use_cache=True)
-                        except Exception:
-                            ref = None
-                        if ref is not None:
-                            # if shapes differ, log a warning (no crash)
-                            if getattr(ref, "shape", None) != getattr(mask, "shape", None):
-                                logger.warning("Mask shape %s != COMET shape %s for core %s", getattr(mask, "shape", None), getattr(ref, "shape", None), core)
-                except Exception:
-                    pass
-
-                # Add labels layer using viewer helper if available, passing affine if we computed one
-                if hasattr(self.sv, "add_label_layer"):
-                    try:
-                        lbl_layer = self.sv.add_label_layer(core=core, labels=mask, name=lname, affine=M_for_viewer, visible=True)
-                    except Exception:
-                        # fallback to napari API; pass affine if available
-                        try:
-                            lbl_layer = self.sv.viewer.add_labels(mask, name=lname, visible=True, affine=M_for_viewer)
-                        except Exception:
-                            lbl_layer = self.sv.viewer.add_labels(mask, name=lname, visible=True)
-                else:
-                    # no helper: use napari directly
-                    try:
-                        lbl_layer = self.sv.viewer.add_labels(mask, name=lname, visible=True, affine=M_for_viewer)
-                    except Exception:
-                        lbl_layer = self.sv.viewer.add_labels(mask, name=lname, visible=True)
-
-                # metadata and UI update
-                lbl_layer.metadata = getattr(lbl_layer, "metadata", {}) or {}
-                lbl_layer.metadata["core"] = core
-                lbl_layer.metadata["modality"] = "cell_mask"
-                lbl_layer.metadata["sb_source"] = "geojson_mask"
-                lbl_layer.metadata["label_to_cell_id"] = id_map
-                lbl_layer.metadata["n_labels"] = int(len(id_map)) if id_map is not None else 0
-                self.info_lbl.setText(f"labels: {lbl_layer.metadata.get('n_labels', 0)}")
-            except Exception as e:
-                logger.exception("Failed to add labels layer for %s: %s", core, e)
-                self.chk.blockSignals(True)
-                self.chk.setChecked(False)
-                self.chk.blockSignals(False)
-                self.info_lbl.setText("add failed")
-        except Exception as e:
-            logger.exception("Failed to add labels layer for %s: %s", core, e)
-            self.chk.blockSignals(True)
-            self.chk.setChecked(False)
-            self.chk.blockSignals(False)
-            self.info_lbl.setText("add failed")
+        self.info_lbl.setText(
+            f"cells: {len(layer.data)}"
+        )
 
 
 class CometChannelRow(QWidget):
@@ -1095,8 +1002,9 @@ class LayersTab(QWidget):
 
         self.active_gene_colors = {}
 
-        self.he_visible = True
+        self.he_visible = True #H&E shown between cores
         self.cell_masks_visible = False
+        self.cell_boundaries_visible = False
 
         layout = QVBoxLayout(self)
 
@@ -1179,10 +1087,15 @@ class LayersTab(QWidget):
 
         # --- CELL MASKS ---
         # Add Cell Mask control row (single global row that operates on active core)
-        mask_group = CollapsibleGroup("Cell Masks")
+        mask_group = CollapsibleGroup("Cell Boundaries")
         mask_layout = QVBoxLayout(mask_group)
 
-        self.mask_row = CellMaskRow(self.sv, loader)
+        self.mask_row = CellBoundaryRow(
+            self.sv,
+            loader
+        )
+
+        self.mask_row.layers_tab = self
 
         mask_layout.addWidget(self.mask_row)
 
@@ -1524,7 +1437,7 @@ class LayersTab(QWidget):
                         shapes_napari,
                         name="cells",
                         color="white",
-                        visible=True,
+                        visible=False,
                         affine=M_com,
                     )
 
@@ -1583,6 +1496,18 @@ class LayersTab(QWidget):
         # Restore H&E
         try:
             self._update_he()
+        except Exception:
+            pass
+        
+        # Restore cell boundaries
+        try:
+            layer = self.sv._get_layer(
+                f"{core}::cells"
+            )
+
+            if layer is not None:
+                layer.visible = self.cell_boundaries_visible
+
         except Exception:
             pass
         
