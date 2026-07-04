@@ -1033,19 +1033,48 @@ class DataTab(QWidget):
         if not path:
             return
 
+
+        ## DEBUG
+        print("\nTRANSCRIPT AFFINES")
+
+        if "loader" in locals():
+            for k, v in loader.transcript_affine_by_core.items():
+                print(k, v)
+
+            print(
+                "Number of fitted transcript affines:",
+                len(loader.transcript_affine_by_core)
+            )
+        else:
+            print("Loader was not created")
+
+
         from spatialbench.io import DatasetLoader
         try:
             self.log_area.setText("Loading manifest and scanning files...")
             QApplication.processEvents()
             loader = DatasetLoader(path).load(
                 do_load_transcripts=False,    # keep genes list only
-                load_boundaries=False,        # skip boundaries initially
+                load_boundaries=True,        # skip boundaries initially
                 load_he=True,                 # H&E
                 load_comet=True,              # COMET
                 load_adata=False,             # skip AnnData
             )
+
+
+            ## DEBUG
+
+            print("LOAD COMPLETE")
+
+            print(
+                "Number of fitted transcript affines:",
+                len(loader.transcript_affine_by_core)
+            )
+
+
             self.log_area.setText(loader.manifest.summary())
             self.dataset_loaded.emit(loader)
+
         except Exception as e:
             self.log_area.setText(f"Error loading dataset:\n{e}")
             logger.exception("Error loading dataset")

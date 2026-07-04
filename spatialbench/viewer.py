@@ -337,22 +337,47 @@ class SpatialViewer:
         width: float = _DEFAULT_BOUNDARY_WIDTH,
         opacity: float = 0.7,
         visible: bool = True,
+        affine: Optional[np.ndarray] = None,
     ):
         layer_name = f"{core}::{name}"
         self._remove_layer_if_exists(layer_name)
 
         is_visible = visible if (self._active_core is None or self._active_core == core) else False
 
+
+        ## DEBUG
+        print(
+            "ADDING BOUNDARY:",
+            layer_name,
+            "visible=",
+            is_visible
+        )
+
+
         layer = self._viewer.add_shapes(
             shapes,
-            shape_type="polygon",
+            shape_type="path",
             name=layer_name,
             edge_color=color,
-            face_color="transparent",
+            # face_color="transparent",
             edge_width=width,
             opacity=opacity,
             visible=is_visible,
+            affine=self._convert_affine(affine),
         )
+
+
+        ## DEBUG
+        print(
+            "BOUNDARY SHAPES:",
+            len(layer.data)
+        )
+
+        print(
+            "FIRST SHAPE:",
+            layer.data[0][:5]
+        )
+
         
         layer.metadata.update({
             "core": core,
