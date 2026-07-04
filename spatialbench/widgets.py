@@ -1479,10 +1479,65 @@ class LayersTab(QWidget):
 
             # Boundaries (optional, if preloaded)
             if core_id in loader.cell_boundaries_df:
+
                 df_cb = loader.cell_boundaries_df[core_id]
+
                 if "vertex_x" in df_cb.columns:
-                    shapes = shapes_to_napari(df_cb)
-                    self.sv.add_boundary_layer(core_id, shapes, name="cells", color="white", visible=False)
+
+                    M_fit = loader.transcript_affine_by_core.get(core_id)
+
+                    shapes_napari = []
+
+                    for _, group in df_cb.groupby(
+                        "cell_id",
+                        sort=False
+                    ):
+
+                        # Xenium coordinates in (x,y)
+                        xy = group[
+                            ["vertex_x", "vertex_y"]
+                        ].to_numpy(dtype=float)
+
+                        if M_fit is not None:
+
+                            H = np.hstack([
+                                xy,
+                                np.ones((len(xy), 1))
+                            ])
+
+                            xy = (
+                                H @ np.asarray(M_fit).T
+                            )[:, :2]
+
+                        # Convert to napari order (y,x)
+                        shapes_napari.append(
+                            xy[:, ::-1]
+                        )
+
+                    M_com = self._adjust_matrix(
+                        loader.alignment_matrices_comet_raw.get(core_id),
+                        core_id
+                    )
+
+                    self.sv.add_boundary_layer(
+                        core_id,
+                        shapes_napari,
+                        name="cells",
+                        color="white",
+                        visible=True,
+                        affine=M_com,
+                    )
+
+
+                    ## DEBUG
+
+                    print(
+                        "BOUNDARY LAYER EXISTS:",
+                        f"{core_id}::cells"
+                    )
+
+
+
 
     def _on_core_swapped(self, core: str):
         """Called when the active core selection changes."""
