@@ -165,6 +165,10 @@ class CellBoundaryRow(QWidget):
         row2.addWidget(self.opacity_sl)
         row2.addStretch()
 
+        self.fill_chk.setEnabled(False)
+        self.opacity_sl.setEnabled(False)
+        self.fill_color_btn.setEnabled(False)
+
 
     def sync_to_core(self, core: str):
         """Update checkbox state when core changes."""
@@ -237,6 +241,18 @@ class CellBoundaryRow(QWidget):
             return
 
         layer.visible = checked
+
+        self.fill_chk.setEnabled(checked)
+        self.opacity_sl.setEnabled(checked)
+        self.fill_color_btn.setEnabled(checked)
+
+        if not checked:
+
+            self.fill_chk.blockSignals(True)
+            self.fill_chk.setChecked(False)
+            self.fill_chk.blockSignals(False)
+
+            self._update_fill()
 
         if hasattr(self, "layers_tab"):
             self.layers_tab.cell_boundaries_visible = checked
@@ -329,11 +345,9 @@ class CellBoundaryRow(QWidget):
                 )
 
             else:
-                layer.face_color = (
-                    0,
-                    0,
-                    0,
-                    0
+                layer.face_color = np.tile(
+                    np.array([0, 0, 0, 0]),
+                    (len(layer.data), 1)
                 )
 
             try:
