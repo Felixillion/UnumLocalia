@@ -92,6 +92,35 @@ class CellBoundaryRow(QWidget):
         self.chk.toggled.connect(self._on_toggle)
         row.addWidget(self.chk)
 
+        # Cell border colour
+        self.color = "white"
+
+        self.color_btn = QPushButton("■")
+        self.color_btn.setFixedWidth(30)
+        self.color_btn.setStyleSheet(
+            f"color: {self.color};"
+            "font-weight: bold;"
+            "font-size: 16px;"
+        )
+        self.color_btn.clicked.connect(
+            self._pick_color
+        )
+
+        row.addWidget(self.color_btn)
+
+
+        # Cell border thickness
+        # row.addWidget(QLabel("W"))
+
+        # self.width_sp = QDoubleSpinBox()
+        # self.width_sp.setRange(0.5, 10.0)
+        # self.width_sp.setValue(1.0)
+        # self.width_sp.setSingleStep(0.5)
+        # self.width_sp.valueChanged.connect(self._update_width)
+
+        # row.addWidget(self.width_sp)
+
+
         self.info_lbl = QLabel("")
         self.info_lbl.setStyleSheet("color: gray;")
         row.addWidget(self.info_lbl)
@@ -117,23 +146,23 @@ class CellBoundaryRow(QWidget):
             layer = None
 
         if layer is not None:
+
             self.chk.blockSignals(True)
-            self.chk.setChecked(bool(layer.visible))
-            self.chk.blockSignals(False)
-            meta = getattr(layer, "metadata", {}) or {}
-            if layer is not None:
-                self.info_lbl.setText(
-                    f"cells: {len(layer.data)}"
+
+            if hasattr(self, "layers_tab"):
+                self.chk.setChecked(
+                    self.layers_tab.cell_boundaries_visible
                 )
-            if nlabels is not None:
-                self.info_lbl.setText(f"labels: {nlabels}")
             else:
-                self.info_lbl.setText("")
-        else:
-            self.chk.blockSignals(True)
-            self.chk.setChecked(False)
+                self.chk.setChecked(
+                    bool(layer.visible)
+                )
+
             self.chk.blockSignals(False)
-            self.info_lbl.setText("")
+
+            self.info_lbl.setText(
+                f"cells: {len(layer.data)}"
+            )
 
 
     def _on_toggle(self, checked: bool):
@@ -171,6 +200,65 @@ class CellBoundaryRow(QWidget):
         self.info_lbl.setText(
             f"cells: {len(layer.data)}"
         )
+
+
+    ## Cell border colour
+    def _pick_color(self):
+
+        c = QColorDialog.getColor()
+
+        if not c.isValid():
+            return
+
+        self.color = c.name()
+
+        self.color_btn.setStyleSheet(
+            f"color: {self.color};"
+            "font-weight: bold;"
+            "font-size: 16px;"
+        )
+
+        core = getattr(
+            self.sv,
+            "active_core",
+            None
+        )
+
+        if core is None:
+            return
+        
+        if hasattr(self, "layers_tab"):
+            self.layers_tab.cell_boundary_color = self.color
+
+        try:
+            layer = self.sv._get_layer(
+                f"{core}::cells"
+            )
+
+            if layer is not None:
+                layer.edge_color = self.color
+
+        except Exception:
+            pass
+        
+    ## Cell border thickness
+    # def _update_width(self):
+
+    #     core = getattr(self.sv, "active_core", None)
+
+    #     if not core:
+    #         return
+
+    #     try:
+    #         layer = self.sv._get_layer(
+    #             f"{core}::cells"
+    #         )
+
+    #         if layer is not None:
+    #             layer.edge_width = self.width_sp.value()
+
+    #     except Exception:
+    #         pass
 
 
 class CometChannelRow(QWidget):
@@ -1045,6 +1133,9 @@ class LayersTab(QWidget):
 
         layout.addWidget(scroll)
 
+        # Cell border colour
+        self.cell_boundary_color = "white"
+
     def _on_tx_size_changed(self, v):
         try:
             self.sv.set_transcript_size(float(v))
@@ -1506,10 +1597,39 @@ class LayersTab(QWidget):
             )
 
             if layer is not None:
-                layer.visible = self.cell_boundaries_visible
+                layer.edge_color = self.cell_boundary_color
 
         except Exception:
             pass
+
+        except Exception:
+            pass
+        
+        # Restore boundary visibility
+        if self.cell_boundaries_visible:
+
+            try:
+                layer = self.sv._get_layer(
+                    f"{core}::cells"
+                )
+
+                if layer is not None:
+                    layer.visible = True
+
+            except Exception:
+                pass
+        else:
+
+            try:
+                layer = self.sv._get_layer(
+                    f"{core}::cells"
+                )
+
+                if layer is not None:
+                    layer.visible = False
+
+            except Exception:
+                pass
         
         # Restore proteins
         for row in self.comet_rows:
@@ -1544,6 +1664,66 @@ class LayersTab(QWidget):
 
             except Exception:
                 pass
+            
+        # Authorative checkbox
+        # if self.mask_row is not None:
+
+        #     self.mask_row.chk.blockSignals(True)
+        #     self.mask_row.chk.setChecked(
+        #         self.cell_boundaries_visible
+        #     )
+        #     self.mask_row.chk.blockSignals(False)
+
+        ## DEBUG
+        print(
+            "BOUNDARY STATE:",
+            self.cell_boundaries_visible
+        )
+
+        try:
+            layer = self.sv._get_layer(
+                f"{core}::cells"
+            )
+
+            print(
+                "FOUND LAYER:",
+                layer is not None
+            )
+
+            if layer is not None:
+                print(
+                    "VISIBLE BEFORE:",
+                    layer.visible
+                )
+
+                layer.visible = self.cell_boundaries_visible
+
+                print(
+                    "VISIBLE AFTER:",
+                    layer.visible
+                )
+
+        except Exception as e:
+            print(
+                "BOUNDARY ERROR:",
+                e
+            )
+
+        
+        ## DEBUG
+        print(
+            "SWAPPING TO:",
+            core
+        )
+
+        layer = self.sv._get_layer(
+            f"{core}::cells"
+        )
+
+        print(
+            "BOUNDARY VISIBLE?",
+            layer.visible if layer else None
+        )
             
 
     def _update_he(self):

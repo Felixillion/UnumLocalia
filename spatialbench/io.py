@@ -624,36 +624,6 @@ class DatasetLoader:
         rms = np.sqrt(((mapped - dst)**2).sum(axis=1)).mean()
         self.transcript_affine_by_core[core_id] = A
 
-
-        
-        ## DEBUG
-        print(f"\nAFFINE {core_id}")
-        print(A)
-        print(f"RMS = {rms}")
-
-
-        print("\nCENTROID COMPARISON", core_id)
-
-        print(
-            "XENIUM:",
-            src[0]
-        )
-
-        print(
-            "COMET:",
-            dst[0]
-        )
-
-        H = np.hstack([src[:1], np.ones((1,1))])
-
-        print(
-            "MAPPED:",
-            (H @ A.T)[0,:2]
-        )
-        
-
-
-
         logger.info("Fitted transcript affine for %s from GeoJSON (matches=%d, rms=%.2f px)", core_id, len(src), rms)
 
 
