@@ -344,40 +344,17 @@ class SpatialViewer:
 
         is_visible = visible if (self._active_core is None or self._active_core == core) else False
 
-
-        ## DEBUG
-        print(
-            "ADDING BOUNDARY:",
-            layer_name,
-            "visible=",
-            is_visible
-        )
-
-
         layer = self._viewer.add_shapes(
             shapes,
-            shape_type="path",
+            shape_type="polygon",
             name=layer_name,
             edge_color=color,
-            # face_color="transparent",
+            face_color=[0, 0, 0, 0],
             edge_width=width,
             opacity=opacity,
             visible=is_visible,
             affine=self._convert_affine(affine),
         )
-
-
-        ## DEBUG
-        print(
-            "BOUNDARY SHAPES:",
-            len(layer.data)
-        )
-
-        print(
-            "FIRST SHAPE:",
-            layer.data[0][:5]
-        )
-
         
         layer.metadata.update({
             "core": core,

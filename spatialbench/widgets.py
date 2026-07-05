@@ -83,14 +83,25 @@ class CellBoundaryRow(QWidget):
         self.sv = sv
         self.loader = loader
 
-        row = QHBoxLayout(self)
-        row.setContentsMargins(0, 2, 0, 2)
-        row.setSpacing(6)
+        main_layout = QVBoxLayout(self)
+
+        row1 = QHBoxLayout()
+        row2 = QHBoxLayout()
+
+        main_layout.addLayout(row1)
+        main_layout.addLayout(row2)
+
+        # Row options
+        row1.setContentsMargins(0, 2, 0, 2)
+        row1.setSpacing(6)
+
+        row2.setContentsMargins(0, 2, 0, 2)
+        row2.setSpacing(6)
+
 
         self.chk = QCheckBox("Cell boundaries")
         self.chk.setChecked(False)
         self.chk.toggled.connect(self._on_toggle)
-        row.addWidget(self.chk)
 
         # Cell border colour
         self.color = "white"
@@ -106,27 +117,54 @@ class CellBoundaryRow(QWidget):
             self._pick_color
         )
 
-        row.addWidget(self.color_btn)
-
-
-        # Cell border thickness
-        # row.addWidget(QLabel("W"))
-
-        # self.width_sp = QDoubleSpinBox()
-        # self.width_sp.setRange(0.5, 10.0)
-        # self.width_sp.setValue(1.0)
-        # self.width_sp.setSingleStep(0.5)
-        # self.width_sp.valueChanged.connect(self._update_width)
-
-        # row.addWidget(self.width_sp)
-
-
         self.info_lbl = QLabel("")
         self.info_lbl.setStyleSheet("color: gray;")
-        row.addWidget(self.info_lbl)
 
-        row.addStretch()
-        self.setLayout(row)
+        # Boundary controls (row 1)
+        row1.addWidget(self.chk)
+        row1.addWidget(self.color_btn)
+        row1.addWidget(self.info_lbl)
+        row1.addStretch()
+
+        # Cell fill
+        self.fill_chk = QCheckBox("Fill")
+        self.fill_chk.toggled.connect(
+            self._update_fill
+        )
+
+        # Cell fill opacity slider
+        self.opacity_sl = QSlider(Qt.Horizontal)
+
+        self.opacity_sl.setRange(0, 100)
+        self.opacity_sl.setValue(20)
+
+        self.opacity_sl.valueChanged.connect(
+            self._update_fill
+        )
+
+        # Add separate fill colour (to border)
+        self.fill_color = "#ffff00"
+
+        self.fill_color_btn = QPushButton("■")
+        self.fill_color_btn.setFixedWidth(30)
+
+        self.fill_color_btn.setStyleSheet(
+            f"color: {self.fill_color};"
+            "font-weight: bold;"
+            "font-size: 16px;"
+        )
+
+        self.fill_color_btn.clicked.connect(
+            self._pick_fill_color
+        )
+
+        # Fill controls (row 2)
+        row2.addWidget(self.fill_chk)
+        row2.addWidget(self.fill_color_btn)
+        row2.addWidget(QLabel("α"))
+        row2.addWidget(self.opacity_sl)
+        row2.addStretch()
+
 
     def sync_to_core(self, core: str):
         """Update checkbox state when core changes."""
@@ -173,13 +211,6 @@ class CellBoundaryRow(QWidget):
             return
 
         layer_name = f"{core}::cells"
-
-        print("LOOKING FOR:", layer_name)
-
-        print("AVAILABLE LAYERS:")
-
-        for layer in self.sv.viewer.layers:
-            print("   ", layer.name)
 
         layer = None
 
@@ -237,28 +268,134 @@ class CellBoundaryRow(QWidget):
 
             if layer is not None:
                 layer.edge_color = self.color
+            
+            self._update_fill()
 
         except Exception:
             pass
         
-    ## Cell border thickness
-    # def _update_width(self):
+    ## Cell fill
+    def _update_fill(self):
+        core = getattr(
+            self.sv,
+            "active_core",
+            None
+        )
 
-    #     core = getattr(self.sv, "active_core", None)
+## DEBUG
+        print(
+            "FILL:",
+            self.fill_chk.isChecked()
+        )
+# ---
 
-    #     if not core:
-    #         return
 
-    #     try:
-    #         layer = self.sv._get_layer(
-    #             f"{core}::cells"
-    #         )
+        if not core:
+            return
 
-    #         if layer is not None:
-    #             layer.edge_width = self.width_sp.value()
+        try:
+            layer = self.sv._get_layer(
+                f"{core}::cells"
+            )
+        except Exception:
+            layer = None
 
-    #     except Exception:
-    #         pass
+        if layer is None:
+            return
+
+        try:
+            layer.edge_color = self.color
+
+            if self.fill_chk.isChecked():
+                opacity = (
+                    self.opacity_sl.value() / 100.0
+                )
+
+                c = QColor(self.fill_color)
+
+## DEBUG
+                print(
+                    "SETTING FACE COLOR:",
+                    self.fill_color,
+                    opacity
+                )
+# ---
+
+                layer.face_color = np.tile(
+                    np.array([
+                        c.redF(),
+                        c.greenF(),
+                        c.blueF(),
+                        opacity
+                    ]),
+                    (len(layer.data), 1)
+                )
+
+## DEBUG
+
+                print(
+                        "FACE COLOR AFTER:",
+                        layer.face_color
+                    )
+
+                print(
+                    "FACE COLOR PROPERTY:",
+                    layer.face_color
+                )
+
+
+                print(
+                    "LAYER TYPE:",
+                    type(layer)
+                )
+# ---
+
+
+            else:
+                layer.face_color = (
+                    0,
+                    0,
+                    0,
+                    0
+                )
+
+            try:
+                layer.refresh()
+            except Exception:
+                pass
+
+        except Exception:
+            pass
+
+        if hasattr(self, "layers_tab"):
+            self.layers_tab.cell_fill_enabled = (
+                self.fill_chk.isChecked()
+            )
+
+            self.layers_tab.cell_fill_opacity = (
+                self.opacity_sl.value() / 100.0
+            )
+
+
+    ## Cell fill colour
+    def _pick_fill_color(self):
+        c = QColorDialog.getColor()
+
+        if not c.isValid():
+            return
+
+        self.fill_color = c.name()
+
+        if hasattr(self, "layers_tab"):
+            self.layers_tab.cell_fill_color = self.fill_color
+
+        self.fill_color_btn.setStyleSheet(
+            f"color: {self.fill_color};"
+            "font-weight: bold;"
+            "font-size: 16px;"
+        )
+
+        self._update_fill()
 
 
 class CometChannelRow(QWidget):
@@ -986,6 +1123,7 @@ class TranscriptChannelRow(QWidget):
             pass
 
 
+## Tab with data selection/loading
 class DataTab(QWidget):
     dataset_loaded = Signal(object)  # emits DatasetLoader
 
@@ -1028,22 +1166,6 @@ class DataTab(QWidget):
         if not path:
             return
 
-
-        ## DEBUG
-        print("\nTRANSCRIPT AFFINES")
-
-        if "loader" in locals():
-            for k, v in loader.transcript_affine_by_core.items():
-                print(k, v)
-
-            print(
-                "Number of fitted transcript affines:",
-                len(loader.transcript_affine_by_core)
-            )
-        else:
-            print("Loader was not created")
-
-
         from spatialbench.io import DatasetLoader
         try:
             self.log_area.setText("Loading manifest and scanning files...")
@@ -1056,17 +1178,6 @@ class DataTab(QWidget):
                 load_adata=False,             # skip AnnData
             )
 
-
-            ## DEBUG
-
-            print("LOAD COMPLETE")
-
-            print(
-                "Number of fitted transcript affines:",
-                len(loader.transcript_affine_by_core)
-            )
-
-
             self.log_area.setText(loader.manifest.summary())
             self.dataset_loaded.emit(loader)
 
@@ -1075,6 +1186,7 @@ class DataTab(QWidget):
             logger.exception("Error loading dataset")
 
 
+## Layers tab
 class LayersTab(QWidget):
     def __init__(self, sv, parent=None):
         super().__init__(parent)
@@ -1135,6 +1247,13 @@ class LayersTab(QWidget):
 
         # Cell border colour
         self.cell_boundary_color = "white"
+
+        # Cell fill
+        self.cell_fill_enabled = False
+        self.cell_fill_opacity = 0.2
+
+        self.cell_fill_color = "#ffff00"
+        
 
     def _on_tx_size_changed(self, v):
         try:
@@ -1533,16 +1652,6 @@ class LayersTab(QWidget):
                     )
 
 
-                    ## DEBUG
-
-                    print(
-                        "BOUNDARY LAYER EXISTS:",
-                        f"{core_id}::cells"
-                    )
-
-
-
-
     def _on_core_swapped(self, core: str):
         """Called when the active core selection changes."""
         try:
@@ -1664,66 +1773,35 @@ class LayersTab(QWidget):
 
             except Exception:
                 pass
-            
-        # Authorative checkbox
-        # if self.mask_row is not None:
-
-        #     self.mask_row.chk.blockSignals(True)
-        #     self.mask_row.chk.setChecked(
-        #         self.cell_boundaries_visible
-        #     )
-        #     self.mask_row.chk.blockSignals(False)
-
-        ## DEBUG
-        print(
-            "BOUNDARY STATE:",
-            self.cell_boundaries_visible
-        )
-
-        try:
-            layer = self.sv._get_layer(
-                f"{core}::cells"
-            )
-
-            print(
-                "FOUND LAYER:",
-                layer is not None
-            )
-
-            if layer is not None:
-                print(
-                    "VISIBLE BEFORE:",
-                    layer.visible
-                )
-
-                layer.visible = self.cell_boundaries_visible
-
-                print(
-                    "VISIBLE AFTER:",
-                    layer.visible
-                )
-
-        except Exception as e:
-            print(
-                "BOUNDARY ERROR:",
-                e
-            )
-
         
-        ## DEBUG
-        print(
-            "SWAPPING TO:",
-            core
-        )
+        # Restore cell fill colour
+        try:
+            if self.mask_row is not None:
 
-        layer = self.sv._get_layer(
-            f"{core}::cells"
-        )
+                self.mask_row.fill_chk.blockSignals(True)
+                self.mask_row.fill_chk.setChecked(
+                    self.cell_fill_enabled
+                )
+                self.mask_row.fill_chk.blockSignals(False)
 
-        print(
-            "BOUNDARY VISIBLE?",
-            layer.visible if layer else None
-        )
+                self.mask_row.opacity_sl.blockSignals(True)
+                self.mask_row.opacity_sl.setValue(
+                    int(self.cell_fill_opacity * 100)
+                )
+                self.mask_row.opacity_sl.blockSignals(False)
+
+                self.mask_row.fill_color = self.cell_fill_color
+
+                self.mask_row.fill_color_btn.setStyleSheet(
+                    f"color: {self.cell_fill_color};"
+                    "font-weight: bold;"
+                    "font-size: 16px;"
+                )
+
+                self.mask_row._update_fill()
+
+        except Exception:
+            pass
             
 
     def _update_he(self):
