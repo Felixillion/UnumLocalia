@@ -220,6 +220,19 @@ class CellBoundaryRow(QWidget):
                 break
 
         if layer is None:
+            try:
+                self.layers_tab._load_boundary_layer_for_core(
+                    core
+                )
+
+                layer = self.sv._get_layer(
+                    f"{core}::cells"
+                )
+
+            except Exception:
+                layer = None
+
+        if layer is None:
             self.info_lbl.setText("no boundaries")
             return
 
@@ -282,14 +295,6 @@ class CellBoundaryRow(QWidget):
             None
         )
 
-## DEBUG
-        print(
-            "FILL:",
-            self.fill_chk.isChecked()
-        )
-# ---
-
-
         if not core:
             return
 
@@ -313,14 +318,6 @@ class CellBoundaryRow(QWidget):
 
                 c = QColor(self.fill_color)
 
-## DEBUG
-                print(
-                    "SETTING FACE COLOR:",
-                    self.fill_color,
-                    opacity
-                )
-# ---
-
                 layer.face_color = np.tile(
                     np.array([
                         c.redF(),
@@ -330,26 +327,6 @@ class CellBoundaryRow(QWidget):
                     ]),
                     (len(layer.data), 1)
                 )
-
-## DEBUG
-
-                print(
-                        "FACE COLOR AFTER:",
-                        layer.face_color
-                    )
-
-                print(
-                    "FACE COLOR PROPERTY:",
-                    layer.face_color
-                )
-
-
-                print(
-                    "LAYER TYPE:",
-                    type(layer)
-                )
-# ---
-
 
             else:
                 layer.face_color = (
@@ -1170,9 +1147,10 @@ class DataTab(QWidget):
         try:
             self.log_area.setText("Loading manifest and scanning files...")
             QApplication.processEvents()
+
             loader = DatasetLoader(path).load(
                 do_load_transcripts=False,    # keep genes list only
-                load_boundaries=True,        # skip boundaries initially
+                load_boundaries=True,         # keep for loading functions, but have cores load individually
                 load_he=True,                 # H&E
                 load_comet=True,              # COMET
                 load_adata=False,             # skip AnnData
@@ -1600,57 +1578,63 @@ class LayersTab(QWidget):
                     except Exception:
                         logger.debug("Could not connect visible event for lazy COMET layer (single)")
 
-            # Boundaries (optional, if preloaded)
-            if core_id in loader.cell_boundaries_df:
 
-                df_cb = loader.cell_boundaries_df[core_id]
+    ## Create Nepari boundaries
+    def _load_boundary_layer_for_core(self, core_id):
 
-                if "vertex_x" in df_cb.columns:
+        if self.sv._get_layer(f"{core_id}::cells") is not None:
+            return
 
-                    M_fit = loader.transcript_affine_by_core.get(core_id)
+        if core_id not in self.loader.cell_boundaries_df:
+            return
 
-                    shapes_napari = []
+        df_cb = self.loader.cell_boundaries_df[core_id]
 
-                    for _, group in df_cb.groupby(
-                        "cell_id",
-                        sort=False
-                    ):
+        if "vertex_x" not in df_cb.columns:
+            return
 
-                        # Xenium coordinates in (x,y)
-                        xy = group[
-                            ["vertex_x", "vertex_y"]
-                        ].to_numpy(dtype=float)
+        M_fit = self.loader.transcript_affine_by_core.get(core_id)
 
-                        if M_fit is not None:
+        shapes_napari = []
 
-                            H = np.hstack([
-                                xy,
-                                np.ones((len(xy), 1))
-                            ])
+        for _, group in df_cb.groupby(
+            "cell_id",
+            sort=False
+        ):
 
-                            xy = (
-                                H @ np.asarray(M_fit).T
-                            )[:, :2]
+            xy = group[
+                ["vertex_x", "vertex_y"]
+            ].to_numpy(dtype=float)
 
-                        # Convert to napari order (y,x)
-                        shapes_napari.append(
-                            xy[:, ::-1]
-                        )
+            if M_fit is not None:
 
-                    M_com = self._adjust_matrix(
-                        loader.alignment_matrices_comet_raw.get(core_id),
-                        core_id
-                    )
+                H = np.hstack([
+                    xy,
+                    np.ones((len(xy), 1))
+                ])
 
-                    self.sv.add_boundary_layer(
-                        core_id,
-                        shapes_napari,
-                        name="cells",
-                        color="white",
-                        visible=False,
-                        affine=M_com,
-                    )
+                xy = (
+                    H @ np.asarray(M_fit).T
+                )[:, :2]
 
+            shapes_napari.append(
+                xy[:, ::-1]
+            )
+
+        M_com = self._adjust_matrix(
+            self.loader.alignment_matrices_comet_raw.get(core_id),
+            core_id
+        )
+
+        self.sv.add_boundary_layer(
+            core_id,
+            shapes_napari,
+            name="cells",
+            color=self.cell_boundary_color,
+            visible=False,
+            affine=M_com,
+        )
+    
 
     def _on_core_swapped(self, core: str):
         """Called when the active core selection changes."""
