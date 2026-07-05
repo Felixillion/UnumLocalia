@@ -1245,6 +1245,35 @@ class LayersTab(QWidget):
         self.cell_fill_opacity = 0.2
 
         self.cell_fill_color = "#ffff00"
+
+        # Export image
+        export_group = QGroupBox("Export")
+        export_layout = QVBoxLayout(export_group)
+
+        self.export_presentation_btn = QPushButton(
+            "Export Presentation PNG"
+        )
+
+        self.export_publication_btn = QPushButton(
+            "Export Publication PNG"
+        )
+
+        self.export_presentation_btn.clicked.connect(
+            lambda: self._export_image(scale=1)
+        )
+
+        self.export_publication_btn.clicked.connect(
+            lambda: self._export_image(scale=4)
+        )
+
+        export_layout.addWidget(
+            self.export_presentation_btn
+        )
+        export_layout.addWidget(
+            self.export_publication_btn
+        )
+
+        layout.addWidget(export_group)
         
 
     def _on_tx_size_changed(self, v):
@@ -1877,6 +1906,42 @@ class LayersTab(QWidget):
                 row.vis_chk.setChecked(False)
             except Exception:
                 pass
+
+
+    ## Add export method
+    def _export_image(self, scale=1):
+
+        from qtpy.QtWidgets import QFileDialog
+
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Image",
+            "spatialbench.png",
+            "PNG (*.png)"
+        )
+
+        if not filename:
+            return
+
+        try:
+
+            img = self.sv.viewer.screenshot(
+                canvas_only=True,
+                scale=scale,
+            )
+
+            from imageio import imwrite
+
+            imwrite(
+                filename,
+                img
+            )
+
+        except Exception as e:
+            print(
+                "EXPORT FAILED:",
+                e
+            )
 
 
 # Minimal helper tabs (kept for completeness)
