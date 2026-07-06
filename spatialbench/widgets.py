@@ -2016,14 +2016,9 @@ class LayersTab(QWidget):
             effective_um_per_world = (
                 pixel_size_um / scale_factor
             )
-
-            world_width = (
-                layer.extent.world[1, 0]
-                - layer.extent.world[0, 0]
-            )
-
+            
             visible_width_um = (
-                world_width
+                (canvas_width / zoom)
                 * effective_um_per_world
             )
 
@@ -2032,20 +2027,8 @@ class LayersTab(QWidget):
             )
 
             bar_px = int(
-                width
-                * (bar_um / visible_width_um)
+                width * (bar_um / visible_width_um)
             )
-
-
-
-## DEBUG
-            print("BAR UM:", bar_um)
-            print("BAR PX:", bar_px)
-## ---
-
-
-
-
 
             label = f"{bar_um:g} um"
 
@@ -2135,18 +2118,9 @@ class LayersTab(QWidget):
 
             return np.asarray(im)
 
-
-## DEGBUG (UNCOMMENT)
-        # except Exception:
-        #     return img
-## ---
-
-
-## DEGBUG
         except Exception as e:
             print("SCALEBAR ERROR:", e)
             return img
-## ---
 
 
 ## Scale bar calculations
@@ -2159,18 +2133,21 @@ class LayersTab(QWidget):
         based on the current field of view.
         """
 
-        target = visible_width_um * 0.25
+        target = visible_width_um * 0.20
 
         choices = [
             10,
             20,
+            25,
             50,
+            75,
             100,
             200,
+            250,
             500,
             1000,
             2000,
-            5000,
+            5000
         ]
 
         for c in choices:
