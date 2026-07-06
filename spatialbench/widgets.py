@@ -86,7 +86,7 @@ class CellBoundaryRow(QWidget):
     Loads rasterized mask synchronously via loader.load_geojson_mask(core).
     """
 
-    def __init__(self, sv, loader, parent=None):
+    def __init__(self, sv, loader, display_name="Xenium", layer_suffix="cells", parent=None):
         super().__init__(parent)
         self.sv = sv
         self.loader = loader
@@ -107,9 +107,12 @@ class CellBoundaryRow(QWidget):
         row2.setSpacing(6)
 
 
-        self.chk = QCheckBox("Cell boundaries")
+        self.chk = QCheckBox(display_name)
         self.chk.setChecked(False)
         self.chk.toggled.connect(self._on_toggle)
+
+        self.display_name = display_name
+        self.layer_suffix = layer_suffix
 
         # Cell border colour
         self.color = "white"
@@ -186,11 +189,11 @@ class CellBoundaryRow(QWidget):
             return
 
         self.chk.setEnabled(True)
-        lname = f"{core}::cells"
+        lname = f"{core}::{self.layer_suffix}"
         layer = None
         try:
             layer = self.sv._get_layer(
-                f"{core}::cells"
+                f"{core}::{self.layer_suffix}"
             )
         except Exception:
             layer = None
@@ -222,7 +225,7 @@ class CellBoundaryRow(QWidget):
         if not core:
             return
 
-        layer_name = f"{core}::cells"
+        layer_name = f"{core}::{self.layer_suffix}"
 
         layer = None
 
@@ -238,7 +241,7 @@ class CellBoundaryRow(QWidget):
                 )
 
                 layer = self.sv._get_layer(
-                    f"{core}::cells"
+                    f"{core}::{self.layer_suffix}"
                 )
 
             except Exception:
@@ -300,7 +303,7 @@ class CellBoundaryRow(QWidget):
 
         try:
             layer = self.sv._get_layer(
-                f"{core}::cells"
+                f"{core}::{self.layer_suffix}"
             )
 
             if layer is not None:
@@ -324,7 +327,7 @@ class CellBoundaryRow(QWidget):
 
         try:
             layer = self.sv._get_layer(
-                f"{core}::cells"
+                f"{core}::{self.layer_suffix}"
             )
         except Exception:
             layer = None
@@ -411,8 +414,8 @@ class CometChannelRow(QWidget):
         self.layers_tab = None
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(0, 2, 0, 2)
-        row.setSpacing(4)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(2)
 
         self.vis_chk = QCheckBox(marker)
         self.vis_chk.setFixedWidth(150)
@@ -1219,7 +1222,7 @@ class LayersTab(QWidget):
 
         # 2. H&E Control
         self.he_group = CollapsibleGroup("H&E Base")
-        he_layout = QFormLayout(self.he_group)
+        he_layout = QHBoxLayout(self.he_group)
         self.he_vis = QCheckBox()
         self.he_vis.setChecked(True)
         self.he_vis.toggled.connect(self._update_he)
@@ -1227,9 +1230,12 @@ class LayersTab(QWidget):
         self.he_op.setRange(0, 100)
         self.he_op.setValue(100)
         self.he_op.valueChanged.connect(self._update_he)
-        he_layout.addRow("Visible", self.he_vis)
-        he_layout.addRow("Opacity", self.he_op)
         layout.addWidget(self.he_group)
+        he_layout.addWidget(QLabel("Visible"))
+        he_layout.addWidget(self.he_vis)
+        he_layout.addSpacing(15)
+        he_layout.addWidget(QLabel("Opacity"))
+        he_layout.addWidget(self.he_op)
 
         # 3. Scrollable Markers
         scroll = QScrollArea()
@@ -1292,6 +1298,8 @@ class LayersTab(QWidget):
         export_layout.addWidget(
             self.scalebar_chk
         )
+
+        self.segmentation_rows = {}
         
 
     def _on_tx_size_changed(self, v):
@@ -1339,16 +1347,28 @@ class LayersTab(QWidget):
         mask_group = CollapsibleGroup("Cell Boundaries")
         mask_layout = QVBoxLayout(mask_group)
 
-        self.mask_row = CellBoundaryRow(
-            self.sv,
-            loader
+        self.seg_rows_container = QWidget()
+
+        self.seg_rows_layout = QVBoxLayout(
+            self.seg_rows_container
         )
 
-        self.mask_row.layers_tab = self
+        self.seg_rows_layout.setSpacing(2)
 
+        seg_scroll = QScrollArea()
 
-        # User-defined segmentation
-        mask_layout.addWidget(self.mask_row)
+        seg_scroll.setWidgetResizable(True)
+
+        seg_scroll.setMinimumHeight(120)
+        seg_scroll.setMaximumHeight(220)
+
+        seg_scroll.setWidget(
+            self.seg_rows_container
+        )
+
+        mask_layout.addWidget(
+            seg_scroll
+        )
 
         self.import_seg_btn = QPushButton(
             "Import Segmentation..."
@@ -1458,6 +1478,9 @@ class LayersTab(QWidget):
             self.gene_rows_widget = QWidget()
             self.gene_rows_layout = QVBoxLayout(self.gene_rows_widget)
 
+            self.gene_rows_layout.setContentsMargins(0, 0, 0, 0)
+            self.gene_rows_layout.setSpacing(1)
+
             gene_scroll.setWidget(self.gene_rows_widget)
 
             gene_layout.addWidget(gene_scroll)
@@ -1478,6 +1501,25 @@ class LayersTab(QWidget):
         self.core_combo.setCurrentText(cores[0])
         self._on_core_swapped(cores[0])
         self.sv.reset_view()
+
+        # Dynamic rows for user-defined segmentation
+        xenium_row = CellBoundaryRow(
+            self.sv,
+            loader,
+            display_name="Xenium",
+            layer_suffix="cells",
+        )
+
+        xenium_row.layers_tab = self
+
+        self.seg_rows_layout.addWidget(
+            xenium_row
+        )
+
+        self.segmentation_rows["Xenium"] = (
+            xenium_row
+        )
+
 
     def _clear_qt_layout(self, layout):
         while layout.count():
@@ -1744,9 +1786,9 @@ class LayersTab(QWidget):
 
         # sync mask row
         try:
-            if getattr(self, "mask_row", None) is not None:
+            for row in self.segmentation_rows.values():
                 try:
-                    self.mask_row.sync_to_core(core)
+                    row.sync_to_core(core)
                 except Exception:
                     pass
         except Exception:
@@ -1762,7 +1804,7 @@ class LayersTab(QWidget):
         # Restore cell boundaries
         try:
             layer = self.sv._get_layer(
-                f"{core}::cells"
+                self.segmentation_rows.values()
             )
 
             if layer is not None:
@@ -1779,7 +1821,7 @@ class LayersTab(QWidget):
 
             try:
                 layer = self.sv._get_layer(
-                    f"{core}::cells"
+                    self.segmentation_rows.values()
                 )
 
                 if layer is not None:
@@ -1791,7 +1833,7 @@ class LayersTab(QWidget):
 
             try:
                 layer = self.sv._get_layer(
-                    f"{core}::cells"
+                    self.segmentation_rows.values()
                 )
 
                 if layer is not None:
@@ -1836,29 +1878,28 @@ class LayersTab(QWidget):
         
         # Restore cell fill colour
         try:
-            if self.mask_row is not None:
-
-                self.mask_row.fill_chk.blockSignals(True)
-                self.mask_row.fill_chk.setChecked(
+            for row in self.segmentation_rows.values():
+                row.fill_chk.blockSignals(True)
+                row.fill_chk.setChecked(
                     self.cell_fill_enabled
                 )
-                self.mask_row.fill_chk.blockSignals(False)
+                row.fill_chk.blockSignals(False)
 
-                self.mask_row.opacity_sl.blockSignals(True)
-                self.mask_row.opacity_sl.setValue(
+                row.opacity_sl.blockSignals(True)
+                row.opacity_sl.setValue(
                     int(self.cell_fill_opacity * 100)
                 )
-                self.mask_row.opacity_sl.blockSignals(False)
+                row.opacity_sl.blockSignals(False)
 
-                self.mask_row.fill_color = self.cell_fill_color
+                row.fill_color = self.cell_fill_color
 
-                self.mask_row.fill_color_btn.setStyleSheet(
+                row.fill_color_btn.setStyleSheet(
                     f"color: {self.cell_fill_color};"
                     "font-weight: bold;"
                     "font-size: 16px;"
                 )
 
-                self.mask_row._update_fill()
+                row._update_fill()
 
         except Exception:
             pass
@@ -2230,6 +2271,23 @@ class LayersTab(QWidget):
                 core,
                 method_name,
             )
+
+            row = CellBoundaryRow(
+                self.sv,
+                self.loader,
+                display_name=method_name,
+                layer_suffix=f"segmentation::{method_name}",
+            )
+
+            row.layers_tab = self
+
+            self.seg_rows_layout.addWidget(
+                row
+            )
+
+            self.segmentation_rows[
+                method_name
+            ] = row
 
         except Exception as e:
             logger.exception(

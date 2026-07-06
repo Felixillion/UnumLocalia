@@ -915,6 +915,30 @@ class DatasetLoader:
             except Exception:
                 continue
 
+## DEBUG
+        n_polygons = len(shapes_napari)
+
+        n_vertices = sum(
+            len(p)
+            for p in shapes_napari
+        )
+
+        print(
+            f"Imported {n_polygons:,} polygons"
+        )
+
+        print(
+            f"Imported {n_vertices:,} vertices"
+        )
+
+        print(
+            f"Average vertices/cell: "
+            f"{n_vertices / max(n_polygons, 1):.1f}"
+        )
+## ---
+
+
+
         self.custom_segmentations.setdefault(
             core_id,
             {}
