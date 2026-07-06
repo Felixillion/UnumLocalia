@@ -1346,7 +1346,22 @@ class LayersTab(QWidget):
 
         self.mask_row.layers_tab = self
 
+
+        # User-defined segmentation
         mask_layout.addWidget(self.mask_row)
+
+        self.import_seg_btn = QPushButton(
+            "Import Segmentation..."
+        )
+
+        self.import_seg_btn.clicked.connect(
+            self._import_segmentation
+        )
+
+        mask_layout.addWidget(
+            self.import_seg_btn
+        )
+
 
         mask_layout.setContentsMargins(6, 6, 6, 6)
 
@@ -1847,6 +1862,26 @@ class LayersTab(QWidget):
 
         except Exception:
             pass
+        
+        # User-defined segmentation
+        for method_name in (
+            self.loader
+            .custom_segmentations
+            .get(core, {})
+        ):
+            try:
+
+                lname = (
+                    f"{core}::segmentation::{method_name}"
+                )
+
+                layer = self.sv._get_layer(lname)
+
+                if layer is not None:
+                    layer.visible = True
+
+            except Exception:
+                pass
             
 
     def _update_he(self):
@@ -2155,6 +2190,91 @@ class LayersTab(QWidget):
                 return c
 
         return choices[-1]
+    
+
+    ## User-defined segmentation import
+    def _import_segmentation(self):
+        core = self.core_combo.currentText()
+
+        if not core:
+            return
+
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select segmentation",
+            "",
+            "GeoJSON (*.geojson *.json)"
+        )
+
+        if not path:
+            return
+
+        method_name, ok = QtWidgets.QInputDialog.getText(
+            self,
+            "Segmentation Name",
+            "Method name:"
+        )
+
+        if not ok or not method_name:
+            return
+
+        try:
+            shapes = self.loader.load_custom_geojson(
+                core,
+                method_name,
+                path,
+                coordinate_space="COMET",
+            )
+
+            self._add_custom_segmentation_layer(
+                core,
+                method_name,
+            )
+
+        except Exception as e:
+            logger.exception(
+                "Failed to import segmentation"
+            )
+
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Import failed",
+                str(e)
+            )
+
+
+    ## User-defined segmentation helper
+    def _add_custom_segmentation_layer(
+        self,
+        core_id,
+        method_name,
+    ):
+
+        seg = (
+            self.loader
+            .custom_segmentations
+            .get(core_id, {})
+            .get(method_name)
+        )
+
+        if seg is None:
+            return
+
+        M_com = self._adjust_matrix(
+            self.loader.alignment_matrices_comet_raw.get(
+                core_id
+            ),
+            core_id,
+        )
+
+        self.sv.add_boundary_layer(
+            core_id,
+            seg["shapes"],
+            name=f"segmentation::{method_name}",
+            color="cyan",
+            visible=True,
+            affine=M_com,
+        )
 
 
 # Minimal helper tabs (kept for completeness)

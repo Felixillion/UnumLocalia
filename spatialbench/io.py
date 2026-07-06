@@ -318,6 +318,9 @@ class DatasetLoader:
         self.cell_label_to_id_by_core: Dict[str, Dict[int, str]] = {}
         self.comet_cell_stats: Dict[str, Any] = {}
 
+        # User-imported segmentations
+        self.custom_segmentations: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
     def load(self, do_load_transcripts: bool = True, load_boundaries: bool = True,
              load_he: bool = True, load_comet: bool = True, load_adata: bool = True) -> "DatasetLoader":
 
@@ -855,3 +858,77 @@ class DatasetLoader:
             f"cores={len(self.manifest.cores) if self.manifest else 0}, "
             f"genes={len(self.genes)}, proteins={len(self.proteins)})"
         )
+    
+
+    ## Load user-imported segmentations
+    def load_custom_geojson(
+        self,
+        core_id: str,
+        method_name: str,
+        geojson_path: Union[str, Path],
+        coordinate_space: str = "COMET",
+    ):
+        """
+        Load user-supplied segmentation polygons.
+        """
+
+        from shapely.geometry import shape
+        from shapely.validation import make_valid
+
+        geojson_path = Path(geojson_path)
+
+        with open(geojson_path, "r") as f:
+            gj = json.load(f)
+
+        shapes_napari = []
+
+        for feat in gj.get("features", []):
+
+            geom = feat.get("geometry")
+
+            if geom is None:
+                continue
+
+            try:
+
+                poly = shape(geom)
+
+                if not poly.is_valid:
+                    poly = make_valid(poly)
+
+                if poly.geom_type == "MultiPolygon":
+                    poly = max(
+                        poly.geoms,
+                        key=lambda p: p.area
+                    )
+
+                coords = np.asarray(
+                    poly.exterior.coords,
+                    dtype=float
+                )
+
+                # Napari uses y,x
+                shapes_napari.append(
+                    coords[:, ::-1]
+                )
+
+            except Exception:
+                continue
+
+        self.custom_segmentations.setdefault(
+            core_id,
+            {}
+        )[method_name] = {
+            "space": coordinate_space,
+            "path": str(geojson_path),
+            "shapes": shapes_napari,
+        }
+
+        logger.info(
+            "Loaded %d polygons for %s (%s)",
+            len(shapes_napari),
+            method_name,
+            core_id,
+        )
+
+        return shapes_napari
