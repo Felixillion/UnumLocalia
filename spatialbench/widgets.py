@@ -12,6 +12,14 @@ import numpy as np
 
 from spatialbench.utils import safe_read_parquet, shapes_to_napari
 
+# Save image
+from imageio import imwrite
+
+# Scale bar imports
+from PIL import Image
+from PIL import ImageDraw
+from PIL import ImageFont
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -459,6 +467,7 @@ class CometChannelRow(QWidget):
             return
 
         core = self.sv.active_core
+
         if not core:
             return
 
@@ -1253,7 +1262,6 @@ class LayersTab(QWidget):
         self.export_presentation_btn = QPushButton(
             "Export Presentation PNG"
         )
-
         self.export_publication_btn = QPushButton(
             "Export Publication PNG"
         )
@@ -1261,7 +1269,6 @@ class LayersTab(QWidget):
         self.export_presentation_btn.clicked.connect(
             lambda: self._export_image(scale=1)
         )
-
         self.export_publication_btn.clicked.connect(
             lambda: self._export_image(scale=4)
         )
@@ -1274,6 +1281,17 @@ class LayersTab(QWidget):
         )
 
         layout.addWidget(export_group)
+
+        # Scale bar (for image export)
+        self.scalebar_chk = QCheckBox(
+            "Include scale bar"
+        )
+
+        self.scalebar_chk.setChecked(True)
+
+        export_layout.addWidget(
+            self.scalebar_chk
+        )
         
 
     def _on_tx_size_changed(self, v):
@@ -1910,7 +1928,6 @@ class LayersTab(QWidget):
 
     ## Add export method
     def _export_image(self, scale=1):
-
         from qtpy.QtWidgets import QFileDialog
 
         filename, _ = QFileDialog.getSaveFileName(
@@ -1930,7 +1947,12 @@ class LayersTab(QWidget):
                 scale=scale,
             )
 
-            from imageio import imwrite
+            if self.scalebar_chk.isChecked():
+
+                img = self._add_scalebar(
+                    img,
+                    scale=scale
+                )
 
             imwrite(
                 filename,
@@ -1938,10 +1960,224 @@ class LayersTab(QWidget):
             )
 
         except Exception as e:
+
             print(
                 "EXPORT FAILED:",
                 e
             )
+
+
+    ## Scale bar (for image export)
+    def _add_scalebar(
+        self,
+        img,
+        scale=1,
+    ):
+        """
+        Draw publication-style scale bar
+        in bottom-right corner.
+        """
+
+        try:
+
+            im = Image.fromarray(img)
+
+            draw = ImageDraw.Draw(im)
+
+            width, height = im.size
+
+            margin = int(30 * scale)
+
+            # Default scale-bar lengths
+            zoom = self.sv.viewer.camera.zoom
+
+            canvas_width = (
+                self.sv.viewer.window.qt_viewer.canvas.size[0]
+            )
+
+            pixel_size_um = 0.2125
+
+            core = self.sv.active_core
+
+            layer = self.sv._get_layer(
+                f"{core}::he"
+            )
+
+            M = np.asarray(
+                layer.metadata["affine_matrix"],
+                dtype=float
+            )
+
+            scale_factor = np.sqrt(
+                M[0,0]**2 +
+                M[1,0]**2
+            )
+
+            effective_um_per_world = (
+                pixel_size_um / scale_factor
+            )
+
+            world_width = (
+                layer.extent.world[1, 0]
+                - layer.extent.world[0, 0]
+            )
+
+            visible_width_um = (
+                world_width
+                * effective_um_per_world
+            )
+
+            bar_um = self._nice_scalebar_length_um(
+                visible_width_um
+            )
+
+            bar_px = int(
+                width
+                * (bar_um / visible_width_um)
+            )
+
+
+
+## DEBUG
+            print("BAR UM:", bar_um)
+            print("BAR PX:", bar_px)
+## ---
+
+
+
+
+
+            label = f"{bar_um:g} um"
+
+            x2 = width - margin
+            x1 = x2 - bar_px
+
+            y = height - margin
+
+            # black outline
+            outline_width = max(
+                12,
+                int(12 * scale)
+            )
+
+            inner_width = max(
+                6,
+                int(6 * scale)
+            )
+
+            draw.line(
+                [(x1, y), (x2, y)],
+                fill="black",
+                width=outline_width,
+            )
+
+            draw.line(
+                [(x1, y), (x2, y)],
+                fill="white",
+                width=inner_width,
+            )
+
+            # white interior
+            draw.line(
+                [(x1, y), (x2, y)],
+                fill="white",
+                width=max(2, int(2 * scale))
+            )
+
+            try:
+                try:
+                    font = ImageFont.truetype(
+                        "Arial.ttf",
+                        int(30 * scale)
+                    )
+                except Exception:
+                    try:
+                        font = ImageFont.truetype(
+                            "/System/Library/Fonts/Supplemental/Arial.ttf",
+                            int(40 * scale)
+                        )
+                    except Exception:
+                        font = ImageFont.load_default()
+            except Exception:
+                font = None
+
+            text_x = x1
+
+            text_y = (
+                y
+                - int(120 * scale)
+            )
+
+            # black outline text
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+
+                    draw.text(
+                        (
+                            text_x + dx,
+                            text_y + dy,
+                        ),
+                        label,
+                        fill="black",
+                        font=font,
+                    )
+
+            # white text
+            draw.text(
+                (
+                    text_x,
+                    text_y,
+                ),
+                label,
+                fill="white",
+                font=font,
+            )
+
+            return np.asarray(im)
+
+
+## DEGBUG (UNCOMMENT)
+        # except Exception:
+        #     return img
+## ---
+
+
+## DEGBUG
+        except Exception as e:
+            print("SCALEBAR ERROR:", e)
+            return img
+## ---
+
+
+## Scale bar calculations
+    def _nice_scalebar_length_um(
+        self,
+        visible_width_um,
+    ):
+        """
+        Choose a sensible scalebar length
+        based on the current field of view.
+        """
+
+        target = visible_width_um * 0.25
+
+        choices = [
+            10,
+            20,
+            50,
+            100,
+            200,
+            500,
+            1000,
+            2000,
+            5000,
+        ]
+
+        for c in choices:
+            if c >= target:
+                return c
+
+        return choices[-1]
 
 
 # Minimal helper tabs (kept for completeness)
