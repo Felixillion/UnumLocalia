@@ -904,8 +904,40 @@ class DatasetLoader:
 
                 coords = np.asarray(
                     poly.exterior.coords,
-                    dtype=float
+                    dtype=np.float64
                 )
+
+                # Explicitly close every polygon if needed
+                # Napari handles polygon closure itself
+                if len(coords) > 1 and np.allclose(
+                    coords[0],
+                    coords[-1]
+                ):
+                    coords = coords[:-1]
+
+                # Ignore large polygon from being filled
+                xmin = np.min(coords[:, 0])
+                xmax = np.max(coords[:, 0])
+
+                ymin = np.min(coords[:, 1])
+                ymax = np.max(coords[:, 1])
+
+                img_w = 4088
+                img_h = 4116
+
+                if (
+                    (xmax - xmin) > 0.95 * img_w
+                    and
+                    (ymax - ymin) > 0.95 * img_h
+                ):
+                    print(
+                        "Skipping giant polygon:",
+                        xmin,
+                        xmax,
+                        ymin,
+                        ymax,
+                    )
+                    continue
 
                 # Napari uses y,x
                 shapes_napari.append(
@@ -913,31 +945,9 @@ class DatasetLoader:
                 )
 
             except Exception:
+                import traceback
+                traceback.print_exc()
                 continue
-
-## DEBUG
-        n_polygons = len(shapes_napari)
-
-        n_vertices = sum(
-            len(p)
-            for p in shapes_napari
-        )
-
-        print(
-            f"Imported {n_polygons:,} polygons"
-        )
-
-        print(
-            f"Imported {n_vertices:,} vertices"
-        )
-
-        print(
-            f"Average vertices/cell: "
-            f"{n_vertices / max(n_polygons, 1):.1f}"
-        )
-## ---
-
-
 
         self.custom_segmentations.setdefault(
             core_id,

@@ -202,20 +202,22 @@ class CellBoundaryRow(QWidget):
 
             self.chk.blockSignals(True)
 
-            if hasattr(self, "layers_tab"):
-                self.chk.setChecked(
-                    self.layers_tab.cell_boundaries_visible
-                )
-            else:
-                self.chk.setChecked(
-                    bool(layer.visible)
-                )
+            self.chk.setChecked(
+                bool(layer.visible)
+            )
 
             self.chk.blockSignals(False)
 
             self.info_lbl.setText(
                 f"cells: {len(layer.data)}"
             )
+
+        else:
+            self.chk.blockSignals(True)
+            self.chk.setChecked(False)
+            self.chk.blockSignals(False)
+
+            self.info_lbl.setText("")
 
 
     def _on_toggle(self, checked: bool):
@@ -354,7 +356,7 @@ class CellBoundaryRow(QWidget):
                     ]),
                     (len(layer.data), 1)
                 )
-
+                
             else:
                 layer.face_color = np.tile(
                     np.array([0, 0, 0, 0]),
@@ -1221,7 +1223,7 @@ class LayersTab(QWidget):
         layout.addWidget(core_group)
 
         # 2. H&E Control
-        self.he_group = CollapsibleGroup("H&E Base")
+        self.he_group = CollapsibleGroup("H&&E Base")
         he_layout = QHBoxLayout(self.he_group)
         self.he_vis = QCheckBox()
         self.he_vis.setChecked(True)
@@ -1262,14 +1264,29 @@ class LayersTab(QWidget):
         self.cell_fill_color = "#ffff00"
 
         # Export image
-        export_group = QGroupBox("Export")
+        export_group = QGroupBox("Export PNG")
         export_layout = QVBoxLayout(export_group)
 
+        btn_row = QHBoxLayout()
+
         self.export_presentation_btn = QPushButton(
-            "Export Presentation PNG"
+            "Low Res"
         )
+
         self.export_publication_btn = QPushButton(
-            "Export Publication PNG"
+            "High Res"
+        )
+
+        btn_row.addWidget(
+            self.export_presentation_btn
+        )
+
+        btn_row.addWidget(
+            self.export_publication_btn
+        )
+
+        export_layout.addLayout(
+            btn_row
         )
 
         self.export_presentation_btn.clicked.connect(
@@ -1277,13 +1294,6 @@ class LayersTab(QWidget):
         )
         self.export_publication_btn.clicked.connect(
             lambda: self._export_image(scale=4)
-        )
-
-        export_layout.addWidget(
-            self.export_presentation_btn
-        )
-        export_layout.addWidget(
-            self.export_publication_btn
         )
 
         layout.addWidget(export_group)
@@ -1516,9 +1526,10 @@ class LayersTab(QWidget):
             xenium_row
         )
 
-        self.segmentation_rows["Xenium"] = (
-            xenium_row
-        )
+        self.segmentation_rows.setdefault(
+            "__xenium__",
+            {}
+        )["cells"] = xenium_row
 
 
     def _clear_qt_layout(self, layout):
@@ -1786,11 +1797,9 @@ class LayersTab(QWidget):
 
         # sync mask row
         try:
-            for row in self.segmentation_rows.values():
-                try:
+            for core_rows in self.segmentation_rows.values():
+                for row in core_rows.values():
                     row.sync_to_core(core)
-                except Exception:
-                    pass
         except Exception:
             pass
         
@@ -1800,47 +1809,6 @@ class LayersTab(QWidget):
             self._update_he()
         except Exception:
             pass
-        
-        # Restore cell boundaries
-        try:
-            layer = self.sv._get_layer(
-                self.segmentation_rows.values()
-            )
-
-            if layer is not None:
-                layer.edge_color = self.cell_boundary_color
-
-        except Exception:
-            pass
-
-        except Exception:
-            pass
-        
-        # Restore boundary visibility
-        if self.cell_boundaries_visible:
-
-            try:
-                layer = self.sv._get_layer(
-                    self.segmentation_rows.values()
-                )
-
-                if layer is not None:
-                    layer.visible = True
-
-            except Exception:
-                pass
-        else:
-
-            try:
-                layer = self.sv._get_layer(
-                    self.segmentation_rows.values()
-                )
-
-                if layer is not None:
-                    layer.visible = False
-
-            except Exception:
-                pass
         
         # Restore proteins
         for row in self.comet_rows:
@@ -1878,28 +1846,33 @@ class LayersTab(QWidget):
         
         # Restore cell fill colour
         try:
-            for row in self.segmentation_rows.values():
-                row.fill_chk.blockSignals(True)
-                row.fill_chk.setChecked(
-                    self.cell_fill_enabled
-                )
-                row.fill_chk.blockSignals(False)
+            for core_rows in self.segmentation_rows.values():
+                for row in core_rows.values():
+                    row.fill_chk.blockSignals(True)
 
-                row.opacity_sl.blockSignals(True)
-                row.opacity_sl.setValue(
-                    int(self.cell_fill_opacity * 100)
-                )
-                row.opacity_sl.blockSignals(False)
+                    row.fill_chk.setChecked(
+                        self.cell_fill_enabled
+                    )
 
-                row.fill_color = self.cell_fill_color
+                    row.fill_chk.blockSignals(False)
 
-                row.fill_color_btn.setStyleSheet(
-                    f"color: {self.cell_fill_color};"
-                    "font-weight: bold;"
-                    "font-size: 16px;"
-                )
+                    row.opacity_sl.blockSignals(True)
 
-                row._update_fill()
+                    row.opacity_sl.setValue(
+                        int(self.cell_fill_opacity * 100)
+                    )
+
+                    row.opacity_sl.blockSignals(False)
+
+                    row.fill_color = self.cell_fill_color
+
+                    row.fill_color_btn.setStyleSheet(
+                        f"color: {self.cell_fill_color};"
+                        "font-weight: bold;"
+                        "font-size: 16px;"
+                    )
+
+                    row._update_fill()
 
         except Exception:
             pass
@@ -2279,15 +2252,26 @@ class LayersTab(QWidget):
                 layer_suffix=f"segmentation::{method_name}",
             )
 
+            row.color = "cyan"
+
+            row.color_btn.setStyleSheet(
+                "color: cyan;"
+                "font-weight: bold;"
+                "font-size: 16px;"
+            )
+
             row.layers_tab = self
 
             self.seg_rows_layout.addWidget(
                 row
             )
 
-            self.segmentation_rows[
-                method_name
-            ] = row
+            self.segmentation_rows.setdefault(
+                core,
+                {}
+            )[method_name] = row
+
+            row.chk.setChecked(True)
 
         except Exception as e:
             logger.exception(
@@ -2307,7 +2291,7 @@ class LayersTab(QWidget):
         core_id,
         method_name,
     ):
-
+    
         seg = (
             self.loader
             .custom_segmentations
@@ -2333,7 +2317,6 @@ class LayersTab(QWidget):
             visible=True,
             affine=M_com,
         )
-
 
 # Minimal helper tabs (kept for completeness)
 class AnalysisTab(QWidget):

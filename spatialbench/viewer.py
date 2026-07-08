@@ -346,7 +346,7 @@ class SpatialViewer:
 
         layer = self._viewer.add_shapes(
             shapes,
-            shape_type="polygon",
+            shape_type=["polygon"] * len(shapes),
             name=layer_name,
             edge_color=color,
             face_color=[0, 0, 0, 0],
