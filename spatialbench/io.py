@@ -1035,6 +1035,29 @@ class DatasetLoader:
             df[f"{marker_name}_mean"] = means
             # df[f"{marker_name}_median"] = medians
 
+        # Call transcript quantification from the existing quantifier
+        try:
+            gene_counts = (
+                self.quantify_transcripts_segmentation(
+                    core_id,
+                    label_mask,
+                )
+            )
+
+            df = df.merge(
+                gene_counts,
+                on="label",
+                how="left",
+            )
+
+            df = df.fillna(0)
+
+        except Exception as e:
+
+            logger.exception(
+                "Transcript quantification failed"
+            )
+
         # Progress message
         logger.info(
             "Quantified %d cells across %d markers",
@@ -1050,12 +1073,89 @@ class DatasetLoader:
         return df
     
 
-    def export_segmentation_quantification(
-        self,
-        core_id,
-        method_name,
-        path,
-    ):
+    ## Transcript quantification
+    def quantify_transcripts_segmentation(self, core_id: str, label_mask: np.ndarray) -> pd.DataFrame:
+        core = self.manifest.cores[core_id]
+
+        ## Transform transcripts into COMET space
+        df_tx = safe_read_parquet(
+            core.transcripts,
+            columns=[
+                "feature_name",
+                "x_location",
+                "y_location",
+            ],
+        )
+
+        coords = df_tx[
+            ["x_location", "y_location"]
+        ].to_numpy(dtype=float)
+
+        M_fit = self.transcript_affine_by_core.get(core_id)
+
+        if M_fit is not None:
+
+            M_f = np.asarray(M_fit, dtype=float)
+
+            if M_f.shape == (2, 3):
+                M_f = np.vstack(
+                    [M_f, [0,0,1]]
+                )
+
+            H = np.hstack(
+                [
+                    coords,
+                    np.ones((len(coords),1))
+                ]
+            )
+
+            coords = (H @ M_f.T)[:, :2]
+
+
+        ## Assign transcripts to cells
+        x = coords[:, 0].astype(np.int32)
+        y = coords[:, 1].astype(np.int32)
+
+        # Keep only valid pixels
+        valid = (
+            (x >= 0)
+            & (x < label_mask.shape[1])
+            & (y >= 0)
+            & (y < label_mask.shape[0])
+        )
+
+        # Apply
+        df_tx = df_tx.loc[valid].copy()
+        x = x[valid]
+        y = y[valid]
+
+        # Lookup segmentation label
+        labels = label_mask[y, x]
+        df_tx["label"] = labels
+
+        # Remove background
+        df_tx = df_tx[
+            df_tx["label"] > 0
+        ]
+
+        ## Generate gene counts
+        gene_counts = (
+            df_tx
+            .groupby(
+                ["label", "feature_name"]
+            )
+            .size()
+            .unstack(fill_value=0)
+        )
+
+        gene_counts.reset_index(
+            inplace=True
+        )
+
+        return gene_counts
+
+
+    def export_segmentation_quantification(self, core_id, method_name, path):
         
         df = (
             self.segmentation_quantification

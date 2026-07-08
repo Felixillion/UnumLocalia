@@ -2349,7 +2349,7 @@ class CellQuantificationTab(QWidget):
             "1. Go to the Layers tab.\n"
             "2. Enable Xenium cell boundaries or import a custom segmentation.\n"
             "3. Return here and select the core and segmentation.\n"
-            "4. Run quantification."
+            "4. Run cell quantification (proteins + transcripts)."
         )
 
         self.help_label.setWordWrap(True)
@@ -2371,7 +2371,7 @@ class CellQuantificationTab(QWidget):
         layout.addWidget(self.seg_combo)
 
         # Run protein quantification
-        self.run_btn = QPushButton("Run Protein Quantification")
+        self.run_btn = QPushButton("Run Cell Quantification")
         layout.addWidget(self.run_btn)
         self.run_btn.clicked.connect(self._run_quantification)
 
