@@ -922,20 +922,20 @@ class DatasetLoader:
                 ymin = np.min(coords[:, 1])
                 ymax = np.max(coords[:, 1])
 
+                bbox_area = (
+                    (xmax - xmin)
+                    * (ymax - ymin)
+                )
+
                 img_w = 4088
                 img_h = 4116
+                
+                img_area = img_w * img_h
 
-                if (
-                    (xmax - xmin) > 0.95 * img_w
-                    and
-                    (ymax - ymin) > 0.95 * img_h
-                ):
+                if bbox_area > 0.20 * img_area:
                     print(
-                        "Skipping giant polygon:",
-                        xmin,
-                        xmax,
-                        ymin,
-                        ymax,
+                        "Skipping huge polygon:",
+                        bbox_area / img_area
                     )
                     continue
 
