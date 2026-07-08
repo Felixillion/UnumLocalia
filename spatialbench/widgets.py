@@ -217,6 +217,14 @@ class CellBoundaryRow(QWidget):
             self.chk.setChecked(False)
             self.chk.blockSignals(False)
 
+            self.fill_chk.blockSignals(True)
+            self.fill_chk.setChecked(False)
+            self.fill_chk.blockSignals(False)
+
+            self.fill_chk.setEnabled(False)
+            self.opacity_sl.setEnabled(False)
+            self.fill_color_btn.setEnabled(False)
+
             self.info_lbl.setText("")
 
 
@@ -1850,9 +1858,12 @@ class LayersTab(QWidget):
                 for row in core_rows.values():
                     row.fill_chk.blockSignals(True)
 
-                    row.fill_chk.setChecked(
-                        self.cell_fill_enabled
-                    )
+                    if row.chk.isChecked():
+                        row.fill_chk.setChecked(
+                            self.cell_fill_enabled
+                        )
+                    else:
+                        row.fill_chk.setChecked(False)
 
                     row.fill_chk.blockSignals(False)
 
