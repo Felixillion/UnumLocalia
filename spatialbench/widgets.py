@@ -2343,6 +2343,18 @@ class CellQuantificationTab(QWidget):
 
         layout = QVBoxLayout(self)
 
+        # Instructions
+        self.help_label = QLabel(
+            "Workflow:\n"
+            "1. Go to the Layers tab.\n"
+            "2. Enable Xenium cell boundaries or import a custom segmentation.\n"
+            "3. Return here and select the core and segmentation.\n"
+            "4. Run quantification."
+        )
+
+        self.help_label.setWordWrap(True)
+        layout.addWidget(self.help_label)
+
         # Core dropdown
         layout.addWidget(QLabel("Core"))
         self.core_combo = QComboBox()
