@@ -29,6 +29,9 @@ from spatialbench.utils import safe_read_csv, safe_read_parquet
 # PIL for rasterization
 from PIL import Image, ImageDraw
 
+# For calculating single cell data
+from scipy import ndimage
+
 logger = logging.getLogger(__name__)
 
 
@@ -320,6 +323,13 @@ class DatasetLoader:
 
         # User-imported segmentations
         self.custom_segmentations: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+        # Quantification results
+        self.segmentation_quantification: Dict[
+            str,
+            Dict[str, pd.DataFrame]
+        ] = {}
+
 
     def load(self, do_load_transcripts: bool = True, load_boundaries: bool = True,
              load_he: bool = True, load_comet: bool = True, load_adata: bool = True) -> "DatasetLoader":
@@ -850,6 +860,214 @@ class DatasetLoader:
             self.comet_cell_stats[core_id] = None
 
         return mask, label_to_id
+    
+
+    ## Quantify single cells from imported cell mask
+    def quantify_comet_segmentation(
+        self,
+        core_id: str,
+        method_name: str,
+    ) -> pd.DataFrame:
+        """
+        Generate per-cell COMET quantification
+        for an imported segmentation.
+
+        Returns
+        -------
+        pd.DataFrame
+            One row per cell.
+        """
+
+        if core_id not in self.custom_segmentations:
+            raise ValueError(
+                f"No segmentations found for core '{core_id}'"
+            )
+
+        if (
+            method_name
+            not in self.custom_segmentations[core_id]
+        ):
+            raise ValueError(
+                f"Segmentation '{method_name}' not found "
+                f"for core '{core_id}'"
+            )
+
+        seg = self.custom_segmentations[
+            core_id
+        ][method_name]
+
+        geojson_path = Path(
+            seg["path"]
+        )
+
+        with open(geojson_path, "r") as f:
+            gj = json.load(f)
+
+        channel0 = np.asarray(
+            self.get_comet_channel(
+                core_id,
+                channel_index=0,
+            ),
+            dtype=float,
+        )
+
+        h = int(channel0.shape[0])
+        w = int(channel0.shape[1])
+
+        label_img = Image.new(
+            "I",
+            (w, h),
+            0,
+        )
+
+        draw = ImageDraw.Draw(label_img)
+
+        rows = []
+
+        for i, feat in enumerate(
+            gj.get("features", [])
+        ):
+
+            geom = feat.get("geometry")
+
+            if geom is None:
+                continue
+
+            poly = shape(geom)
+
+            if not poly.is_valid:
+                poly = make_valid(poly)
+
+            if poly.geom_type == "MultiPolygon":
+                poly = max(
+                    poly.geoms,
+                    key=lambda p: p.area,
+                )
+
+            if (
+                not poly.is_valid
+                or poly.area <= 0
+            ):
+                continue
+            
+            # Ignore cell/s that take up >20% of area
+            xmin, ymin, xmax, ymax = poly.bounds
+
+            bbox_area = (
+                (xmax - xmin)
+                * (ymax - ymin)
+            )
+
+            img_w = 4088
+            img_h = 4116
+
+            img_area = img_w * img_h
+
+            if bbox_area > 0.20 * img_area:
+                continue
+            
+
+            centroid = poly.centroid
+
+            # Extract data
+            label = len(rows) + 1
+
+            coords = [
+                (float(x), float(y))
+                for x, y in poly.exterior.coords
+            ]
+
+            draw.polygon(
+                coords,
+                outline=label,
+                fill=label,
+            )
+
+            rows.append({
+                "label": label,
+                "cell_id": str(i),
+                "centroid_x": centroid.x,
+                "centroid_y": centroid.y,
+                "area_px": poly.area,
+            })
+
+        # Prepare cells
+        df = pd.DataFrame(rows)
+
+        labels = df["label"].to_numpy()
+
+        label_mask = np.asarray(
+            label_img,
+            dtype=np.int32,
+        )
+
+        ## Calculate means and medians for each cell
+        for channel_index, marker_name in enumerate(
+            self.comet_markers[core_id]
+        ):
+            
+            # Calculate mean and median intensity for each cell
+            channel = np.asarray(
+                self.get_comet_channel(
+                    core_id,
+                    channel_index=channel_index,
+                ),
+                dtype=float,
+            )
+
+            # Means
+            means = ndimage.mean(
+                channel,
+                labels=label_mask,
+                index=labels,
+            )
+
+            # Medians
+            # medians = ndimage.labeled_comprehension(
+            #     channel,
+            #     label_mask,
+            #     labels,
+            #     np.median,
+            #     float,
+            #     np.nan,
+            # )
+            
+            df[f"{marker_name}_mean"] = means
+            # df[f"{marker_name}_median"] = medians
+
+        # Progress message
+        logger.info(
+            "Quantified %d cells across %d markers",
+            len(df),
+            len(self.comet_markers[core_id]),
+        )
+
+        self.segmentation_quantification.setdefault(
+            core_id,
+            {}
+        )[method_name] = df
+
+        return df
+    
+
+    def export_segmentation_quantification(
+        self,
+        core_id,
+        method_name,
+        path,
+    ):
+        
+        df = (
+            self.segmentation_quantification
+            [core_id]
+            [method_name]
+        )
+
+        df.to_csv(
+            path,
+            index=False,
+        )
+
 
     def __repr__(self) -> str:
         loaded = "loaded" if self.manifest else "not loaded"
@@ -966,3 +1184,4 @@ class DatasetLoader:
         )
 
         return shapes_napari
+        

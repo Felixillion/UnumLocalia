@@ -20,6 +20,9 @@ from PIL import Image
 from PIL import ImageDraw
 from PIL import ImageFont
 
+# CSV export
+from qtpy.QtWidgets import QFileDialog
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -1988,8 +1991,6 @@ class LayersTab(QWidget):
 
     ## Add export method
     def _export_image(self, scale=1):
-        from qtpy.QtWidgets import QFileDialog
-
         filename, _ = QFileDialog.getSaveFileName(
             self,
             "Save Image",
@@ -2251,6 +2252,9 @@ class LayersTab(QWidget):
                 coordinate_space="COMET",
             )
 
+            if hasattr(self, "cell_quant_tab"):
+                self.cell_quant_tab.refresh()
+
             self._add_custom_segmentation_layer(
                 core,
                 method_name,
@@ -2330,20 +2334,133 @@ class LayersTab(QWidget):
         )
 
 # Minimal helper tabs (kept for completeness)
-class AnalysisTab(QWidget):
+class CellQuantificationTab(QWidget):
     def __init__(self, sv, parent=None):
         super().__init__(parent)
+
+        self.sv = sv
+        self.loader = None
+
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Analysis controls will go here."))
+
+        # Core dropdown
+        layout.addWidget(QLabel("Core"))
+        self.core_combo = QComboBox()
+
+        self.core_combo.currentTextChanged.connect(
+            lambda _: self.refresh()
+        )
+
+        layout.addWidget(self.core_combo)
+
+        # Segmentation
+        layout.addWidget(QLabel("Segmentation"))
+        self.seg_combo = QComboBox()
+        layout.addWidget(self.seg_combo)
+
+        # Run protein quantification
+        self.run_btn = QPushButton("Run Protein Quantification")
+        layout.addWidget(self.run_btn)
+        self.run_btn.clicked.connect(self._run_quantification)
+
+        self.result_label = QLabel("No quantification run")
+        layout.addWidget(self.result_label)
+
+        # Export CSV file
+        self.export_btn = QPushButton("Export CSV")
+        layout.addWidget(self.export_btn)
+        self.export_btn.setEnabled(False)
+        self.export_btn.clicked.connect(self._export_csv)
+
+
+        self.last_core = None
+        self.last_method = None
+
+        # Stretch (keep at end)
         layout.addStretch()
 
 
-class BenchmarkTab(QWidget):
-    def __init__(self, sv, parent=None):
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Benchmarking controls will go here."))
-        layout.addStretch()
+    ## Give access to the loader
+    def set_loader(self, loader):
+        self.loader = loader
+        self.core_combo.clear()
+        self.core_combo.addItems(
+                sorted(
+                    loader.manifest.cores.keys()
+                )
+            )
+        self.refresh()
+
+
+    def _run_quantification(self):
+        core = self.core_combo.currentText()
+
+        method_name = self.seg_combo.currentText()
+
+        if not method_name:
+                self.result_label.setText(
+                    "No segmentation selected"
+                )
+                return
+
+        try:
+            df = self.loader.quantify_comet_segmentation(
+                core,
+                method_name,
+            )
+
+            self.last_core = core
+            self.last_method = method_name
+
+            self.result_label.setText(
+                        f"{len(df):,} cells quantified"
+                    )
+
+            self.export_btn.setEnabled(True)
+
+        except Exception as e:
+
+            self.result_label.setText(
+                f"Error: {e}"
+            )
+
+
+    ## Export CSV file
+    def _export_csv(self):
+        if self.last_core is None:
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Quantification",
+            "quantification.csv",
+            "CSV (*.csv)"
+        )
+
+        if not path:
+            return
+
+        self.loader.export_segmentation_quantification(
+            self.last_core,
+            self.last_method,
+            path,
+        )
+
+
+    def refresh(self):
+            if self.loader is None:
+                return
+
+            core = self.core_combo.currentText()
+
+            self.seg_combo.clear()
+
+            for name in (
+                self.loader
+                .custom_segmentations
+                .get(core, {})
+            ):
+                self.seg_combo.addItem(name)
 
 
 # ---------------------------------------------------------------------------
@@ -2366,17 +2483,18 @@ def launch():
 
     data_tab = DataTab()
     layers_tab = LayersTab(sv)
-    analysis_tab = AnalysisTab(sv)
-    benchmark_tab = BenchmarkTab(sv)
+    cell_quant_tab = CellQuantificationTab(sv)
+
+    layers_tab.cell_quant_tab = cell_quant_tab
 
     # wire dataset_loaded signal to layers_tab.populate
     data_tab.dataset_loaded.connect(layers_tab.populate)
+    data_tab.dataset_loaded.connect(cell_quant_tab.set_loader)
 
     tabs = QTabWidget()
     tabs.addTab(data_tab, "Data")
     tabs.addTab(layers_tab, "Layers")
-    tabs.addTab(analysis_tab, "Analysis")
-    tabs.addTab(benchmark_tab, "Benchmark")
+    tabs.addTab(cell_quant_tab, "Cell Quantification")
 
     # attach to viewer window (viewer implementation must provide add_dock_widget)
     try:
