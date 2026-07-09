@@ -1,8 +1,8 @@
 # Dataset Format
 
-SpatialBench uses an automated directory loader. You do not need to manually select individual files; instead, select the **root directory** of your dataset.
+UnumLocalia uses an automated directory loader. You do not need to manually select individual files; instead, select the **root directory** of your dataset.
 
-SpatialBench will recursively search (up to two levels deep) to discover all relevant modalities.
+UnumLocalia will recursively search (up to two levels deep) to discover all relevant modalities.
 
 ## Required and Optional Files
 The auto-detection looks for specific file names and extensions:
@@ -15,11 +15,11 @@ The auto-detection looks for specific file names and extensions:
 
 ### 2. COMET Data (Proteins)
 * `*.ome.tif` or `*.ome.tiff`: Multiplexed immunofluorescence images. 
-* SpatialBench uses the filename (minus the extension) as the protein marker name (e.g., `CD45.ome.tiff` becomes `CD45`).
+* UnumLocalia uses the filename (minus the extension) as the protein marker name (e.g., `CD45.ome.tiff` becomes `CD45`).
 * *Tip: It helps to place these inside a folder named `comet/` or `proteins/` to help the auto-detector prioritise them.*
 
 ### 3. H&E Image
-* `*.tif` or `*.tiff`: The aligned H&E whole-slide image. If there are multiple TIFFs, SpatialBench assumes the largest one is the H&E slide.
+* `*.tif` or `*.tiff`: The aligned H&E whole-slide image. If there are multiple TIFFs, UnumLocalia assumes the largest one is the H&E slide.
 
 ### 4. Alignment
 * `matrix.csv`: A 3x3 affine transformation matrix (9 values). This is used to align COMET coordinates with Xenium coordinates.

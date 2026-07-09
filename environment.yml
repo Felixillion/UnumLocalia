@@ -1,4 +1,4 @@
-name: spatialbench
+name: unumlocalia
 channels:
   - conda-forge
   - defaults

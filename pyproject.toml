@@ -3,13 +3,13 @@ requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "spatialbench"
+name = "unumlocalia"
 version = "1.0.0"
 description = "A multimodal spatial biology toolkit for visualisation, segmentation benchmarking, and single-cell analysis."
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "SpatialBench Contributors"},
+    {name = "UnumLocalia Contributors"},
 ]
 requires-python = ">=3.9"
 keywords = [
@@ -26,11 +26,11 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Felixillion/SpatialBench"
-Issues = "https://github.com/Felixillion/SpatialBench/issues"
+Homepage = "https://github.com/Felixillion/UnumLocalia"
+Issues = "https://github.com/Felixillion/UnumLocalia/issues"
 
 [project.scripts]
-spatialbench = "spatialbench.widgets:launch"
+unumlocalia = "unumlocalia.widgets:launch"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

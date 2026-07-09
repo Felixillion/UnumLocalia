@@ -1,4 +1,4 @@
-# spatialbench/io.py
+# unumlocalia/io.py
 """
 Dataset discovery, manifest building, and lazy data loading for multi-core datasets.
 
@@ -24,7 +24,7 @@ import json
 from shapely.geometry import shape, Polygon
 from shapely.validation import make_valid
 
-from spatialbench.utils import safe_read_csv, safe_read_parquet
+from unumlocalia.utils import safe_read_csv, safe_read_parquet
 
 # PIL for rasterization
 from PIL import Image, ImageDraw
@@ -66,7 +66,7 @@ class CoreManifest:
 
 @dataclass
 class DatasetManifest:
-    """Paths to all cores in a SpatialBench dataset."""
+    """Paths to all cores in a UnumLocalia dataset."""
     folder: Path
     cores: Dict[str, CoreManifest] = field(default_factory=dict)
 
@@ -362,6 +362,14 @@ class DatasetLoader:
                     self.cell_boundaries_df[core_id] = safe_read_parquet(core.cell_boundaries)
                 if core.nucleus_boundaries:
                     self.nucleus_boundaries_df[core_id] = safe_read_parquet(core.nucleus_boundaries)
+
+                self.custom_segmentations.setdefault(
+                    core_id,
+                    {}
+                )["cells"] = {
+                    "space": "XENIUM",
+                    "path": None,
+                }
 
             # --- Alignments ---
             # COMET alignment
@@ -878,128 +886,228 @@ class DatasetLoader:
             One row per cell.
         """
 
-        if core_id not in self.custom_segmentations:
-            raise ValueError(
-                f"No segmentations found for core '{core_id}'"
+        # Xenium native segmentation
+        if method_name == "cells":
+
+            df_cb = self.cell_boundaries_df[core_id]
+
+            channel0 = np.asarray(
+                self.get_comet_channel(
+                    core_id,
+                    channel_index=0,
+                ),
+                dtype=float,
             )
 
-        if (
-            method_name
-            not in self.custom_segmentations[core_id]
-        ):
-            raise ValueError(
-                f"Segmentation '{method_name}' not found "
-                f"for core '{core_id}'"
+            h = int(channel0.shape[0])
+            w = int(channel0.shape[1])
+
+            label_img = Image.new(
+                "I",
+                (w, h),
+                0,
             )
 
-        seg = self.custom_segmentations[
-            core_id
-        ][method_name]
+            draw = ImageDraw.Draw(label_img)
 
-        geojson_path = Path(
-            seg["path"]
-        )
+            rows = []
 
-        with open(geojson_path, "r") as f:
-            gj = json.load(f)
+            for cell_id, group in df_cb.groupby("cell_id"):
 
-        channel0 = np.asarray(
-            self.get_comet_channel(
-                core_id,
-                channel_index=0,
-            ),
-            dtype=float,
-        )
+                coords_xy = group[
+                    ["vertex_x", "vertex_y"]
+                ].to_numpy(dtype=float)
 
-        h = int(channel0.shape[0])
-        w = int(channel0.shape[1])
+                if len(coords_xy) < 3:
+                    continue
 
-        label_img = Image.new(
-            "I",
-            (w, h),
-            0,
-        )
+                #
+                # Transform Xenium coordinates into COMET space
+                #
+                M_fit = self.transcript_affine_by_core.get(core_id)
 
-        draw = ImageDraw.Draw(label_img)
+                if M_fit is not None:
 
-        rows = []
+                    M = np.asarray(M_fit, dtype=float)
 
-        for i, feat in enumerate(
-            gj.get("features", [])
-        ):
+                    if M.shape == (2, 3):
+                        M = np.vstack(
+                            [M, [0, 0, 1]]
+                        )
 
-            geom = feat.get("geometry")
+                    H = np.hstack(
+                        [
+                            coords_xy,
+                            np.ones((len(coords_xy), 1))
+                        ]
+                    )
 
-            if geom is None:
-                continue
+                    coords_xy = (
+                        H @ M.T
+                    )[:, :2]
 
-            poly = shape(geom)
+                poly = Polygon(coords_xy)
 
-            if not poly.is_valid:
-                poly = make_valid(poly)
+                if (
+                    not poly.is_valid
+                    or poly.area <= 0
+                ):
+                    continue
 
-            if poly.geom_type == "MultiPolygon":
-                poly = max(
-                    poly.geoms,
-                    key=lambda p: p.area,
+                label = len(rows) + 1
+
+                draw.polygon(
+                    [
+                        (float(x), float(y))
+                        for x, y in coords_xy
+                    ],
+                    outline=label,
+                    fill=label,
+                )
+
+                centroid = poly.centroid
+
+                rows.append({
+                    "label": label,
+                    "cell_id": str(cell_id),
+                    "centroid_x": centroid.x,
+                    "centroid_y": centroid.y,
+                    "area_px": poly.area,
+                })
+
+            df = pd.DataFrame(rows)
+
+            labels = df["label"].to_numpy()
+
+            label_mask = np.asarray(
+                label_img,
+                dtype=np.int32,
+            )
+
+        else:
+
+            if core_id not in self.custom_segmentations:
+                raise ValueError(
+                    f"No segmentations found for core '{core_id}'"
                 )
 
             if (
-                not poly.is_valid
-                or poly.area <= 0
+                method_name
+                not in self.custom_segmentations[core_id]
             ):
-                continue
-            
-            # Ignore cell/s that take up >20% of area
-            xmin, ymin, xmax, ymax = poly.bounds
+                raise ValueError(
+                    f"Segmentation '{method_name}' not found "
+                    f"for core '{core_id}'"
+                )
 
-            bbox_area = (
-                (xmax - xmin)
-                * (ymax - ymin)
+            seg = self.custom_segmentations[
+                core_id
+            ][method_name]
+
+            geojson_path = Path(
+                seg["path"]
             )
 
-            img_w = 4088
-            img_h = 4116
+            with open(geojson_path, "r") as f:
+                gj = json.load(f)
 
-            img_area = img_w * img_h
-
-            if bbox_area > 0.20 * img_area:
-                continue
-            
-
-            centroid = poly.centroid
-
-            # Extract data
-            label = len(rows) + 1
-
-            coords = [
-                (float(x), float(y))
-                for x, y in poly.exterior.coords
-            ]
-
-            draw.polygon(
-                coords,
-                outline=label,
-                fill=label,
+            channel0 = np.asarray(
+                self.get_comet_channel(
+                    core_id,
+                    channel_index=0,
+                ),
+                dtype=float,
             )
 
-            rows.append({
-                "label": label,
-                "cell_id": str(i),
-                "centroid_x": centroid.x,
-                "centroid_y": centroid.y,
-                "area_px": poly.area,
-            })
+            h = int(channel0.shape[0])
+            w = int(channel0.shape[1])
 
-        # Prepare cells
-        df = pd.DataFrame(rows)
+            label_img = Image.new(
+                "I",
+                (w, h),
+                0,
+            )
 
-        labels = df["label"].to_numpy()
+            draw = ImageDraw.Draw(label_img)
 
-        label_mask = np.asarray(
-            label_img,
-            dtype=np.int32,
-        )
+            rows = []
+
+            for i, feat in enumerate(
+                gj.get("features", [])
+            ):
+
+                geom = feat.get("geometry")
+
+                if geom is None:
+                    continue
+
+                poly = shape(geom)
+
+                if not poly.is_valid:
+                    poly = make_valid(poly)
+
+                if poly.geom_type == "MultiPolygon":
+                    poly = max(
+                        poly.geoms,
+                        key=lambda p: p.area,
+                    )
+
+                if (
+                    not poly.is_valid
+                    or poly.area <= 0
+                ):
+                    continue
+                
+                # Ignore cell/s that take up >20% of area
+                xmin, ymin, xmax, ymax = poly.bounds
+
+                bbox_area = (
+                    (xmax - xmin)
+                    * (ymax - ymin)
+                )
+
+                img_w = 4088
+                img_h = 4116
+
+                img_area = img_w * img_h
+
+                if bbox_area > 0.20 * img_area:
+                    continue
+                
+
+                centroid = poly.centroid
+
+                # Extract data
+                label = len(rows) + 1
+
+                coords = [
+                    (float(x), float(y))
+                    for x, y in poly.exterior.coords
+                ]
+
+                draw.polygon(
+                    coords,
+                    outline=label,
+                    fill=label,
+                )
+
+                rows.append({
+                    "label": label,
+                    "cell_id": str(i),
+                    "centroid_x": centroid.x,
+                    "centroid_y": centroid.y,
+                    "area_px": poly.area,
+                })
+
+            # Prepare cells
+            df = pd.DataFrame(rows)
+
+            labels = df["label"].to_numpy()
+
+            label_mask = np.asarray(
+                label_img,
+                dtype=np.int32,
+            )
 
         ## Calculate means and medians for each cell
         for channel_index, marker_name in enumerate(

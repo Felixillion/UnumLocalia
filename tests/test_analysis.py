@@ -1,7 +1,7 @@
 """
 tests/test_analysis.py
 ======================
-Unit tests for spatialbench.analysis
+Unit tests for unumlocalia.analysis
 """
 
 import anndata as ad
@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 import scipy.sparse as sp
 
-from spatialbench.analysis import (
+from unumlocalia.analysis import (
     prepare_modality,
     run_pca,
     run_neighbors,

@@ -6,7 +6,7 @@ or on an AnnData built from a user segmentation (see Example 2).
 
 Usage
 -----
-    conda activate spatialbench
+    conda activate unumlocalia
     python examples/03_single_cell_analysis.py /path/to/dataset
 """
 
@@ -15,8 +15,8 @@ from pathlib import Path
 
 
 def main(dataset_folder: str) -> None:
-    from spatialbench.io import DatasetLoader
-    from spatialbench.analysis import (
+    from unumlocalia.io import DatasetLoader
+    from unumlocalia.analysis import (
         run_pca,
         run_neighbors,
         run_umap,
@@ -27,12 +27,12 @@ def main(dataset_folder: str) -> None:
         plot_heatmap,
         plot_dotplot,
     )
-    from spatialbench.benchmark import (
+    from unumlocalia.benchmark import (
         compare_clusterings,
         clustering_metrics_table,
         plot_contingency,
     )
-    from spatialbench.utils import export_figure, export_dataframe
+    from unumlocalia.utils import export_figure, export_dataframe
 
     out_dir = Path(dataset_folder) / "analysis_output"
     out_dir.mkdir(exist_ok=True)

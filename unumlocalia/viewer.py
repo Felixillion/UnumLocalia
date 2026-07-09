@@ -1,5 +1,5 @@
 """
-spatialbench.viewer
+unumlocalia.viewer
 ===================
 Napari-based spatial viewer with programmatic layer management for multi-core datasets.
 
@@ -24,9 +24,9 @@ _DEFAULT_BOUNDARY_WIDTH = 1
 
 
 class SpatialViewer:
-    """Managed wrapper around a ``napari.Viewer`` for SpatialBench."""
+    """Managed wrapper around a ``napari.Viewer`` for UnumLocalia."""
 
-    def __init__(self, title: str = "SpatialBench") -> None:
+    def __init__(self, title: str = "UnumLocalia") -> None:
         import napari  # deferred import
 
         self._viewer = napari.Viewer(title=title, show=False)
@@ -168,7 +168,7 @@ class SpatialViewer:
         visible: bool = True,
         affine: Optional[np.ndarray] = None,
     ):
-        from spatialbench.utils import colormap_from_name
+        from unumlocalia.utils import colormap_from_name
 
         layer_name = f"{core}::comet::{marker_name}"
         self._remove_layer_if_exists(layer_name)
@@ -222,7 +222,7 @@ class SpatialViewer:
         opacity: Optional[float] = None,
         visible: Optional[bool] = None,
     ) -> None:
-        from spatialbench.utils import colormap_from_name
+        from unumlocalia.utils import colormap_from_name
         
         cores_to_update = [core] if core else [lyr.metadata.get("core") for lyr in self._viewer.layers if lyr.metadata.get("marker") == marker_name]
 

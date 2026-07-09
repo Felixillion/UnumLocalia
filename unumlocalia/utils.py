@@ -1,7 +1,7 @@
 """
-spatialbench.utils
+unumlocalia.utils
 ==================
-Shared utility functions used across all SpatialBench modules.
+Shared utility functions used across all UnumLocalia modules.
 
 All functions are pure/stateless and operate without modifying any input data.
 """

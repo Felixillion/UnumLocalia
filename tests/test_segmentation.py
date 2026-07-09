@@ -1,14 +1,14 @@
 """
 tests/test_segmentation.py
 ==========================
-Unit tests for spatialbench.segmentation
+Unit tests for unumlocalia.segmentation
 """
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from spatialbench.segmentation import (
+from unumlocalia.segmentation import (
     _compute_label_areas,
     assign_xenium_transcripts,
     pivot_transcript_counts,

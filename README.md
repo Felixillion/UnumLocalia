@@ -1,6 +1,6 @@
-# SpatialBench
+# UnumLocalia
 
-**SpatialBench** is an open-source Python toolkit accompanying multimodal spatial biology datasets.
+**UnumLocalia** is an open-source Python toolkit accompanying multimodal spatial biology datasets.
 It provides a simple, reproducible environment for visualisation, exploration,
 segmentation benchmarking, and basic single-cell analysis — all without modifying
 your original data.
@@ -18,22 +18,22 @@ your original data.
    conda install -n base -c conda-forge mamba
    ```
 
-2. **Create the environment and install SpatialBench**
+2. **Create the environment and install UnumLocalia**
 ```bash
 # from the repository root
 mamba env create -f environment.yml
 eval "$(mamba shell hook --shell zsh)"   # follow printed instructions for your shell
-mamba activate spatialbench
+mamba activate unumlocalia
 python -m pip install --upgrade pip setuptools wheel build
 python -m pip install -e .
 ```
 
 3. **Download the dataset and launch the GUI**
-    - Download the dataset ZIP from the DOI listed below and extract it to a folder, for example ~/SpatialBench-dataset.
-    - Launch SpatialBench:
+    - Download the dataset ZIP from the DOI listed below and extract it to a folder, for example ~/UnumLocalia-dataset.
+    - Launch UnumLocalia:
     ```bash
-    mamba activate spatialbench
-    spatialbench
+    mamba activate unumlocalia
+    unumlocalia
     ```
     - In the app, click File → Load dataset and select the dataset root folder.
 
@@ -43,30 +43,31 @@ python -m pip install -e .
 
 | Module | Functionality |
 |---|---|
-| **Viewer** | Interactive napari viewer for H&E, COMET, Xenium transcripts, and cell/nucleus boundaries |
-| **Segmentation** | Load label masks, GeoJSON, or QuPath objects; measure COMET intensities; assign transcripts |
-| **Analysis** | PCA, UMAP, Leiden clustering, heatmaps, dot plots, spatial plots via Scanpy |
-| **Benchmark** | ARI, NMI, contingency heatmaps, Sankey diagrams, per-marker scatter + correlations |
-| **Export** | Figures (PNG, SVG, PDF), tables (CSV), AnnData (H5AD) |
+| **Viewer** | Interactive napari viewer for H&E, COMET, Xenium transcripts, and cell boundaries |
+| **Segmentation** | Load label masks (GeoJSON files) |
+| **Cell Quanfication** | Measure COMET intensities, assign transcripts |
+| **Export** | Figures (PNG), cell quantification (CSV) |
 
 ---
 
 ## Supported data modalities
 
-SpatialBench expects a dataset folder containing:
+UnumLocalia expects a dataset folder containing:
 
 ```
 dataset/
     core01_hcc/
         comet/
-            core01_comet.ome.tif
+            comet_thresholding.csv
+            core01_comet.ome.zarr
             keypoints_comet.csv
             matrix_comet.csv
         he/
-            core01_he.ome.tif
+            core01_he.ome.zarr
             keypoints_he.csv
             matrix_he.csv
         xenium/
+            cell_boundaries_comet_space.geojson
             cell_boundaries.parquet
             cells.csv
             nucleus_boundaries.parquet
@@ -80,22 +81,6 @@ dataset/
     core04_hca/
         (same as core01)
     dataset_manifest.csv
-
-
-
-
-
-    cells.csv                       ← Xenium cell metadata
-    cell_boundaries.parquet         ← Xenium cell polygons
-    nucleus_boundaries.parquet      ← Xenium nucleus polygons
-    transcripts.parquet             ← Xenium transcript coordinates + gene names
-    matrix.csv                      ← 3×3 affine alignment matrix
-    he.tif                          ← Aligned H&E whole-slide image
-    comet/
-        CK8.ome.tiff
-        CD45.ome.tiff
-        ...                         ← One OME-TIFF per protein marker
-    anndata.h5ad                    ← Reference integrated AnnData
 ```
 
 All files are auto-detected — no manual configuration required.
@@ -107,21 +92,21 @@ All files are auto-detected — no manual configuration required.
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/Felixillion/SpatialBench.git
-cd SpatialBench
+git clone https://github.com/Felixillion/UnumLocalia.git
+cd UnumLocalia
 ```
 
 ### 2. Create the conda environment
 
 ```bash
 conda env create -f environment.yml
-conda activate spatialbench
+conda activate unumlocalia
 ```
 
 ### 3. Verify the installation
 
 ```bash
-spatialbench --version   # prints 1.0.0
+unumlocalia --version   # prints 1.0.0
 ```
 
 ---
@@ -131,24 +116,24 @@ spatialbench --version   # prints 1.0.0
 ### Launch the GUI
 
 ```bash
-conda activate spatialbench
-spatialbench
+conda activate unumlocalia
+unumlocalia
 ```
 
-A napari window will open with the SpatialBench panel docked on the right.
+A napari window will open with the UnumLocalia panel docked on the right.
 Go to the **Settings** tab, select your dataset folder, and click **Load dataset**.
 
 Alternatively, launch from Python:
 
 ```python
-from spatialbench.widgets import launch
+from unumlocalia.widgets import launch
 launch()
 ```
 
 ### Programmatic use
 
 ```python
-from spatialbench import DatasetLoader
+from unumlocalia import DatasetLoader
 
 # Load dataset
 loader = DatasetLoader("/path/to/dataset")
@@ -159,7 +144,7 @@ print(loader.manifest.summary())
 print(f"Genes: {len(loader.genes)}   Proteins: {len(loader.proteins)}")
 
 # Run analysis
-from spatialbench import run_pca, run_umap, run_leiden, plot_umap
+from unumlocalia import run_pca, run_umap, run_leiden, plot_umap
 
 adata = loader.anndata_ref
 run_pca(adata, modality="genes")
@@ -173,7 +158,7 @@ fig.savefig("umap_clusters.png", dpi=150, bbox_inches="tight")
 ### Benchmark a custom segmentation
 
 ```python
-from spatialbench import (
+from unumlocalia import (
     DatasetLoader,
     load_segmentation,
     measure_comet_intensities,
@@ -197,7 +182,7 @@ tx_df = assign_xenium_transcripts(labels, loader.transcripts_df)
 adata_user = build_anndata(labels, comet_df, tx_df, loader.cells_df)
 
 # Compare clusterings
-from spatialbench import compare_clusterings, plot_contingency
+from unumlocalia import compare_clusterings, plot_contingency
 results = compare_clusterings(
     adata_original.obs["leiden_genes"],
     adata_user.obs["leiden_genes"],
@@ -210,8 +195,8 @@ print(f"ARI: {results['ari']:.4f}   NMI: {results['nmi']:.4f}")
 ## Repository structure
 
 ```
-SpatialBench/
-├── spatialbench/
+UnumLocalia/
+├── unumlocalia/
 │   ├── __init__.py        ← Public API + version
 │   ├── io.py              ← Auto-detection, lazy loading, alignment
 │   ├── viewer.py          ← napari layer management + cell inspector
@@ -241,11 +226,11 @@ SpatialBench/
 
 ---
 
-## Citing SpatialBench
+## Citing UnumLocalia
 
-If you use SpatialBench in your research, please cite:
+If you use UnumLocalia in your research, please cite:
 
-> *SpatialBench: an open-source toolkit for multimodal spatial biology benchmarking.*
+> *UnumLocalia: an open-source toolkit for multimodal spatial biology benchmarking.*
 > (manuscript in preparation)
 
 ---

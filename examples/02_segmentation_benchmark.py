@@ -4,7 +4,7 @@ Example 2: Load a custom segmentation, build a new AnnData, and compare
 
 Usage
 -----
-    conda activate spatialbench
+    conda activate unumlocalia
     python examples/02_segmentation_benchmark.py \\
         /path/to/dataset \\
         /path/to/my_segmentation.tif
@@ -15,15 +15,15 @@ from pathlib import Path
 
 
 def main(dataset_folder: str, segmentation_path: str) -> None:
-    from spatialbench.io import DatasetLoader
-    from spatialbench.segmentation import (
+    from unumlocalia.io import DatasetLoader
+    from unumlocalia.segmentation import (
         load_segmentation,
         measure_comet_intensities,
         assign_xenium_transcripts,
         build_anndata,
         compare_segmentations,
     )
-    from spatialbench.utils import export_dataframe
+    from unumlocalia.utils import export_dataframe
 
     # ---- Load dataset -------------------------------------------------------
     print(f"Loading dataset from: {dataset_folder}")

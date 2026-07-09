@@ -1,14 +1,14 @@
 """
 tests/test_benchmark.py
 =======================
-Unit tests for spatialbench.benchmark
+Unit tests for unumlocalia.benchmark
 """
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from spatialbench.benchmark import (
+from unumlocalia.benchmark import (
     compare_clusterings,
     clustering_metrics_table,
     compare_markers,

@@ -1,5 +1,5 @@
 """
-spatialbench.analysis
+unumlocalia.analysis
 =====================
 Single-cell analysis pipeline built on top of Scanpy.
 
@@ -651,3 +651,327 @@ def _inject_proteins_as_vars(
         var=pd.DataFrame(index=var_names),
     )
     return tmp
+
+
+# ---------------------------------------------------------------------------
+# Intensity measurement
+# ---------------------------------------------------------------------------
+
+def measure_comet_intensities(
+    labels: np.ndarray,
+    comet_arrays: Dict[str, np.ndarray],
+    stat: str = "mean",
+) -> pd.DataFrame:
+    """Measure per-cell COMET protein intensities from a label mask.
+
+    Parameters
+    ----------
+    labels:
+        2-D integer label mask.
+    comet_arrays:
+        ``{marker_name: 2-D image array}`` dict as returned by
+        :func:`unumlocalia.io.get_comet_arrays`.
+    stat:
+        Summary statistic: ``'mean'``, ``'median'``, or ``'sum'``.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per cell, columns: ``cell_id``, one column per marker.
+
+    Notes
+    -----
+    Only cells present in both *labels* and each COMET image are included.
+    Background (label 0) is excluded.
+    """
+    unique_ids = np.unique(labels)
+    unique_ids = unique_ids[unique_ids != 0]
+
+    if len(unique_ids) == 0:
+        logger.warning("No cell labels found in label mask.")
+        return pd.DataFrame()
+
+    stat_fn = {
+        "mean": np.mean,
+        "median": np.median,
+        "sum": np.sum,
+    }.get(stat)
+    if stat_fn is None:
+        raise ValueError(f"Unsupported stat '{stat}'. Use 'mean', 'median', or 'sum'.")
+
+    records: List[Dict] = []
+
+    for cell_id in unique_ids:
+        cell_mask = labels == cell_id
+        row: Dict = {"cell_id": int(cell_id)}
+        for marker, arr in comet_arrays.items():
+            # Align shapes if COMET image is different size to label mask
+            if arr.shape != labels.shape:
+                arr_aligned = _resize_array(arr, labels.shape)
+            else:
+                arr_aligned = arr
+            pixel_vals = arr_aligned[cell_mask].astype(np.float64)
+            row[marker] = float(stat_fn(pixel_vals)) if len(pixel_vals) > 0 else np.nan
+        records.append(row)
+
+    df = pd.DataFrame(records)
+    logger.info(
+        "Measured COMET intensities: %d cells × %d markers",
+        len(df), len(comet_arrays),
+    )
+    return df
+
+
+def _resize_array(arr: np.ndarray, target_shape: Tuple[int, int]) -> np.ndarray:
+    """Resize a 2-D array to *target_shape* using nearest-neighbour resampling."""
+    try:
+        import cv2
+        return cv2.resize(
+            arr.astype(np.float32),
+            (target_shape[1], target_shape[0]),
+            interpolation=cv2.INTER_NEAREST,
+        )
+    except ImportError:
+        # Fallback: use numpy index scaling
+        h_scale = target_shape[0] / arr.shape[0]
+        w_scale = target_shape[1] / arr.shape[1]
+        rows = (np.arange(target_shape[0]) / h_scale).astype(int)
+        cols = (np.arange(target_shape[1]) / w_scale).astype(int)
+        return arr[np.ix_(rows, cols)]
+
+
+# ---------------------------------------------------------------------------
+# Transcript assignment
+# ---------------------------------------------------------------------------
+
+def assign_xenium_transcripts(
+    labels: np.ndarray,
+    transcripts_df: pd.DataFrame,
+    x_col: str = "x_location",
+    y_col: str = "y_location",
+    gene_col: str = "feature_name",
+    pixel_size: float = 1.0,
+) -> pd.DataFrame:
+    """Assign Xenium transcripts to cells in a label mask.
+
+    Each transcript is assigned to the cell whose label overlies its
+    pixel coordinate (fast raster lookup, no polygon operations needed).
+
+    Parameters
+    ----------
+    labels:
+        2-D integer label mask.
+    transcripts_df:
+        Transcript DataFrame with x/y coordinates and gene names.
+    x_col, y_col:
+        Column names for transcript coordinates (in the same space as the
+        label mask).
+    gene_col:
+        Column name for gene/feature names.
+    pixel_size:
+        Scaling factor from transcript coordinate units to label mask pixels
+        (e.g. if transcripts are in µm and the label mask is in µm/pixel).
+
+    Returns
+    -------
+    pd.DataFrame
+        Transcripts with an additional ``cell_id`` column (0 = unassigned).
+    """
+    df = transcripts_df.copy()
+
+    # Convert coordinates to integer pixel indices
+    col_idx = (df[x_col].to_numpy() / pixel_size).astype(int)
+    row_idx = (df[y_col].to_numpy() / pixel_size).astype(int)
+
+    H, W = labels.shape
+
+    # Clamp to valid range
+    row_idx = np.clip(row_idx, 0, H - 1)
+    col_idx = np.clip(col_idx, 0, W - 1)
+
+    df["cell_id"] = labels[row_idx, col_idx].astype(int)
+
+    n_assigned = (df["cell_id"] > 0).sum()
+    logger.info(
+        "Assigned %d / %d transcripts to cells (%d unique cells)",
+        n_assigned, len(df),
+        df.loc[df["cell_id"] > 0, "cell_id"].nunique(),
+    )
+    return df
+
+
+def pivot_transcript_counts(
+    assigned_df: pd.DataFrame,
+    gene_col: str = "feature_name",
+    cell_col: str = "cell_id",
+) -> pd.DataFrame:
+    """Pivot assigned transcripts to a cell × gene count matrix.
+
+    Parameters
+    ----------
+    assigned_df:
+        Output of :func:`assign_xenium_transcripts`.
+    gene_col:
+        Column containing gene names.
+    cell_col:
+        Column containing cell IDs.
+
+    Returns
+    -------
+    pd.DataFrame
+        Index = cell_id, columns = gene names, values = integer counts.
+        Background (cell_id == 0) is excluded.
+    """
+    df = assigned_df[assigned_df[cell_col] > 0]
+    counts = (
+        df.groupby([cell_col, gene_col])
+        .size()
+        .unstack(fill_value=0)
+    )
+    logger.info(
+        "Transcript count matrix: %d cells × %d genes", *counts.shape
+    )
+    return counts
+
+
+# ---------------------------------------------------------------------------
+# AnnData construction
+# ---------------------------------------------------------------------------
+
+def build_anndata(
+    labels: np.ndarray,
+    comet_intensities: Optional[pd.DataFrame] = None,
+    transcripts_df: Optional[pd.DataFrame] = None,
+    cells_metadata: Optional[pd.DataFrame] = None,
+    gene_col: str = "feature_name",
+    cell_col: str = "cell_id",
+    x_centroid_col: str = "x_centroid",
+    y_centroid_col: str = "y_centroid",
+) -> "anndata.AnnData":
+    """Build a fresh AnnData object from a user-supplied segmentation.
+
+    Parameters
+    ----------
+    labels:
+        2-D integer label mask (used to enumerate cells).
+    comet_intensities:
+        Per-cell protein intensities (from :func:`measure_comet_intensities`).
+        Must have a ``cell_id`` column.
+    transcripts_df:
+        Assigned transcript DataFrame (from :func:`assign_xenium_transcripts`).
+        Must have ``cell_id`` and gene name columns.
+    cells_metadata:
+        Optional metadata DataFrame with additional per-cell columns
+        (e.g. area, centroid coordinates).
+    gene_col:
+        Column name for gene names in *transcripts_df*.
+    cell_col:
+        Column name for cell identifiers (must match across all DataFrames).
+    x_centroid_col, y_centroid_col:
+        Column names for spatial coordinates in *cells_metadata*.
+
+    Returns
+    -------
+    anndata.AnnData
+        AnnData with:
+        - ``.X`` — gene count matrix (cells × genes).
+        - ``.obsm['X_protein']`` — protein intensity matrix.
+        - ``.obs`` — cell metadata (area, centroid, etc.).
+        - ``.obsm['spatial']`` — spatial coordinates array ``(N, 2)``.
+        - ``.layers['raw_counts']`` — copy of raw integer gene counts.
+        - ``.uns['source']`` — ``'user_segmentation'``.
+
+    Raises
+    ------
+    ImportError
+        If ``anndata`` is not installed.
+    ValueError
+        If no cells can be derived from *labels*.
+    """
+    try:
+        import anndata
+        import scipy.sparse as sp
+    except ImportError as exc:
+        raise ImportError(
+            "anndata and scipy are required to build AnnData objects. "
+            "Install with: conda install anndata scipy"
+        ) from exc
+
+    # Determine cell IDs from label mask
+    cell_ids = np.unique(labels)
+    cell_ids = sorted(int(c) for c in cell_ids if c != 0)
+
+    if not cell_ids:
+        raise ValueError("Label mask contains no cell labels (all background).")
+
+    # ---- Gene count matrix ------------------------------------------------
+    if transcripts_df is not None:
+        gene_counts = pivot_transcript_counts(
+            transcripts_df, gene_col=gene_col, cell_col=cell_col
+        )
+        # Reindex to all cells in label mask (fill missing with 0)
+        gene_counts = gene_counts.reindex(cell_ids, fill_value=0)
+        X = sp.csr_matrix(gene_counts.to_numpy(dtype=np.float32))
+        var = pd.DataFrame(index=gene_counts.columns.astype(str))
+    else:
+        X = sp.csr_matrix((len(cell_ids), 0), dtype=np.float32)
+        var = pd.DataFrame()
+
+    # ---- Observation metadata ---------------------------------------------
+    obs = pd.DataFrame(index=[str(c) for c in cell_ids])
+    obs.index.name = "cell_id"
+
+    if cells_metadata is not None and cell_col in cells_metadata.columns:
+        meta_indexed = cells_metadata.set_index(cell_col)
+        meta_indexed.index = meta_indexed.index.astype(str)
+        obs = obs.join(meta_indexed, how="left")
+
+    # ---- Build AnnData ----------------------------------------------------
+    adata = anndata.AnnData(X=X, obs=obs, var=var)
+
+    # Raw counts layer
+    adata.layers["raw_counts"] = X.copy()
+
+    # ---- Protein layer ----------------------------------------------------
+    if comet_intensities is not None and not comet_intensities.empty:
+        prot_indexed = comet_intensities.set_index(cell_col)
+        prot_indexed.index = prot_indexed.index.astype(str)
+        prot_aligned = prot_indexed.reindex(
+            [str(c) for c in cell_ids], fill_value=np.nan
+        )
+        adata.obsm["X_protein"] = prot_aligned.to_numpy(dtype=np.float32)
+        adata.uns["protein_names"] = list(prot_aligned.columns)
+
+    # ---- Spatial coordinates ---------------------------------------------
+    if (
+        cells_metadata is not None
+        and x_centroid_col in cells_metadata.columns
+        and y_centroid_col in cells_metadata.columns
+    ):
+        coord_df = (
+            cells_metadata.set_index(cell_col)[[x_centroid_col, y_centroid_col]]
+            .reindex(cell_ids)
+        )
+        adata.obsm["spatial"] = coord_df.to_numpy(dtype=np.float32)
+
+    # ---- Compute cell areas from label mask if not in metadata -----------
+    if "cell_area" not in adata.obs.columns:
+        area_dict = _compute_label_areas(labels)
+        adata.obs["cell_area"] = [
+            area_dict.get(int(c), np.nan)
+            for c in adata.obs.index.astype(int, errors="ignore")
+        ]
+
+    adata.uns["source"] = "user_segmentation"
+    logger.info(
+        "Built AnnData: %d cells × %d genes, %d protein channels",
+        adata.n_obs, adata.n_vars,
+        adata.obsm.get("X_protein", np.empty((0, 0))).shape[1],
+    )
+    return adata
+
+
+def _compute_label_areas(labels: np.ndarray) -> Dict[int, int]:
+    """Return a dict of {cell_id: pixel_count} for each label."""
+    unique, counts = np.unique(labels, return_counts=True)
+    return {int(u): int(c) for u, c in zip(unique, counts) if u != 0}

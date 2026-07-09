@@ -1,9 +1,9 @@
 """
-Example 1: Load a SpatialBench dataset and launch the interactive viewer.
+Example 1: Load a UnumLocalia dataset and launch the interactive viewer.
 
 Usage
 -----
-    conda activate spatialbench
+    conda activate unumlocalia
     python examples/01_load_and_view.py /path/to/dataset
 """
 
@@ -12,9 +12,9 @@ from pathlib import Path
 
 
 def main(dataset_folder: str) -> None:
-    from spatialbench.io import DatasetLoader
-    from spatialbench.viewer import SpatialViewer
-    from spatialbench.utils import shapes_to_napari
+    from unumlocalia.io import DatasetLoader
+    from unumlocalia.viewer import SpatialViewer
+    from unumlocalia.utils import shapes_to_napari
 
     # ---- Load dataset -------------------------------------------------------
     print(f"Loading dataset from: {dataset_folder}")
@@ -26,7 +26,7 @@ def main(dataset_folder: str) -> None:
     print(f"Proteins detected: {len(loader.proteins)}")
 
     # ---- Launch viewer ------------------------------------------------------
-    sv = SpatialViewer(title="SpatialBench — Example 1")
+    sv = SpatialViewer(title="UnumLocalia — Example 1")
 
     # H&E layer
     if loader.he_array is not None:

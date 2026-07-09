@@ -1,5 +1,5 @@
 """
-SpatialBench — setup.py
+UnumLocalia — setup.py
 """
 
 from setuptools import find_packages, setup
@@ -8,16 +8,16 @@ with open("README.md", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="spatialbench",
+    name="unumlocalia",
     version="1.0.0",
-    author="SpatialBench Contributors",
+    author="UnumLocalia Contributors",
     description=(
         "A multimodal spatial biology toolkit for visualisation, "
         "segmentation benchmarking, and single-cell analysis."
     ),
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/Felixillion/SpatialBench",
+    url="https://github.com/Felixillion/UnumLocalia",
     packages=find_packages(),
     python_requires=">=3.9",
     install_requires=[
@@ -39,7 +39,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "spatialbench=spatialbench.widgets:launch",
+            "unumlocalia=unumlocalia.widgets:launch",
         ],
     },
     classifiers=[

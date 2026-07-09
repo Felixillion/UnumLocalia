@@ -1,7 +1,7 @@
 """
 tests/test_io.py
 ================
-Unit tests for spatialbench.io — file detection and manifest building.
+Unit tests for unumlocalia.io — file detection and manifest building.
 """
 
 import json
@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from spatialbench.io import detect_files, DatasetManifest, load_alignment
+from unumlocalia.io import detect_files, DatasetManifest, load_alignment
 
 
 # ---------------------------------------------------------------------------

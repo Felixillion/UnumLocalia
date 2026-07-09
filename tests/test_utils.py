@@ -1,13 +1,13 @@
 """
 tests/test_utils.py
 ===================
-Unit tests for spatialbench.utils
+Unit tests for unumlocalia.utils
 """
 
 import numpy as np
 import pytest
 
-from spatialbench.utils import (
+from unumlocalia.utils import (
     affine_transform_coords,
     arcsinh_transform,
     log1p_norm,

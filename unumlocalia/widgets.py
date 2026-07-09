@@ -1,4 +1,4 @@
-# spatialbench/widgets.py
+# unumlocalia/widgets.py
 """
 PyQt-based dock widget panels that integrate with the Napari viewer.
 """
@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from spatialbench.utils import safe_read_parquet, shapes_to_napari
+from unumlocalia.utils import safe_read_parquet, shapes_to_napari
 
 # Save image
 from imageio import imwrite
@@ -52,7 +52,7 @@ try:
     _QT_AVAILABLE = True
 except Exception:
     _QT_AVAILABLE = False
-    logger.warning("Qt not available. SpatialBench GUI cannot be displayed.")
+    logger.warning("Qt not available. UnumLocalia GUI cannot be displayed.")
 
 
 ## Genes for side bar
@@ -564,7 +564,7 @@ class TranscriptChannelRow(QWidget):
     - Attach a Napari Affine(matrix=M_h) to the created points layer exactly once,
       and only if the existing transform differs.
     - Minimal, defensive error handling and optional terminal diagnostics via
-      SPATIALBENCH_DEBUG environment variable.
+      UNUMLOCALIA_DEBUG environment variable.
     """
     def __init__(self, gene: str, sv, loader, parent=None):
         super().__init__(parent)
@@ -1198,7 +1198,7 @@ class DataTab(QWidget):
         g_layout = QVBoxLayout(group)
 
         self.path_edit = QLineEdit()
-        self.path_edit.setPlaceholderText("Select SpatialBench dataset folder...")
+        self.path_edit.setPlaceholderText("Select UnumLocalia dataset folder...")
 
         browse_btn = QPushButton("Browse...")
         browse_btn.clicked.connect(self._browse)
@@ -1242,7 +1242,7 @@ class DataTab(QWidget):
         if not path:
             return
 
-        from spatialbench.io import DatasetLoader
+        from unumlocalia.io import DatasetLoader
         try:
             self.log_area.setText("Loading manifest and scanning files...")
             QApplication.processEvents()
@@ -1456,17 +1456,6 @@ class LayersTab(QWidget):
     def import_state(self, state):
         self._restoring_session = True
 
-## DEBUG
-        print(
-            "IMPORTING:",
-            state.get("protein_settings")
-        )
-## ---
-
-
-
-
-
         if "he_visible" in state:
             self.he_vis.setChecked(
                 state["he_visible"]
@@ -1488,14 +1477,6 @@ class LayersTab(QWidget):
             in self.protein_settings.items()
             if settings.get("visible", False)
         }
-
-
-## DEBUG
-        print(
-            "AFTER IMPORT:",
-            self.active_proteins
-        )
-## ---
 
         self.recent_genes = state.get(
             "recent_genes",
@@ -2291,7 +2272,7 @@ class LayersTab(QWidget):
         filename, _ = QFileDialog.getSaveFileName(
             self,
             "Save Image",
-            "spatialbench.png",
+            "unumlocalia.png",
             "PNG (*.png)"
         )
 
@@ -2882,6 +2863,11 @@ class CellQuantificationTab(QWidget):
 
             self.seg_combo.clear()
 
+            # Xenium segmentation
+            if core in self.loader.cell_boundaries_df:
+                self.seg_combo.addItem("cells")
+
+            # User imported segmentations
             for name in (
                 self.loader
                 .custom_segmentations
@@ -2896,17 +2882,17 @@ class CellQuantificationTab(QWidget):
 
 def launch():
     """
-    Create the SpatialBench control tabs and attach them to the viewer.
+    Create the UnumLocalia control tabs and attach them to the viewer.
     This function is intentionally minimal: it expects a `SpatialViewer` class
-    available at spatialbench.viewer.SpatialViewer with the methods used below.
+    available at unumlocalia.viewer.SpatialViewer with the methods used below.
     """
     try:
-        from spatialbench.viewer import SpatialViewer
+        from unumlocalia.viewer import SpatialViewer
     except Exception as e:
         logger.exception("Could not import SpatialViewer: %s", e)
         raise
 
-    sv = SpatialViewer("SpatialBench")
+    sv = SpatialViewer("UnumLocalia")
 
     data_tab = DataTab()
     layers_tab = LayersTab(sv)
@@ -2944,11 +2930,6 @@ def launch():
     ## Load session
     def load_session():
 
-## DEBUG
-        print("LOAD SESSION CLICKED")
-## ---
-
-        
         path, _ = QFileDialog.getOpenFileName(
                 None,
                 "Load Session",
@@ -2970,7 +2951,7 @@ def launch():
         )
 
         # Automatically reload dataset
-        from spatialbench.io import DatasetLoader
+        from unumlocalia.io import DatasetLoader
 
         # Add loading message
         import os
@@ -3063,13 +3044,6 @@ def launch():
                             "Failed restoring segmentation"
                         )
 
-## DEBUG
-        print(session["ui"])
-## ---
-
-
-
-
         layers_tab.import_state(
             session.get(
                 "ui",
@@ -3094,11 +3068,11 @@ def launch():
 
     # attach to viewer window (viewer implementation must provide add_dock_widget)
     try:
-        sv.viewer.window.add_dock_widget(tabs, name="SpatialBench Controls", area="right")
+        sv.viewer.window.add_dock_widget(tabs, name="UnumLocalia Controls", area="right")
     except Exception:
         # fallback: try to add via viewer API if available
         try:
-            sv.viewer.add_dock_widget(tabs, name="SpatialBench Controls", area="right")
+            sv.viewer.add_dock_widget(tabs, name="UnumLocalia Controls", area="right")
         except Exception:
             logger.debug("Could not attach dock widget via known APIs; continuing.")
 

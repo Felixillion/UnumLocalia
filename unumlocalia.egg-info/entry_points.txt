@@ -1,0 +1,2 @@
+[console_scripts]
+unumlocalia = unumlocalia.widgets:launch

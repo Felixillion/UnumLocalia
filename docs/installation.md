@@ -1,6 +1,6 @@
 # Installation
 
-SpatialBench runs locally to handle very large images and datasets. It is written in Python and is highly cross-platform.
+UnumLocalia runs locally to handle very large images and datasets. It is written in Python and is highly cross-platform.
 
 ## Requirements
 * Python 3.9, 3.10, or 3.11.
@@ -9,8 +9,8 @@ SpatialBench runs locally to handle very large images and datasets. It is writte
 ## Installation Steps
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/Felixillion/SpatialBench.git
-   cd SpatialBench
+   git clone https://github.com/Felixillion/UnumLocalia.git
+   cd UnumLocalia
    ```
 
 2. **Create the environment:**
@@ -21,15 +21,15 @@ SpatialBench runs locally to handle very large images and datasets. It is writte
 
 3. **Activate and Verify:**
    ```bash
-   conda activate spatialbench
-   spatialbench --version
+   conda activate unumlocalia
+   unumlocalia --version
    ```
 
-## Starting SpatialBench
+## Starting UnumLocalia
 You can start the GUI from the terminal:
 ```bash
-conda activate spatialbench
-spatialbench
+conda activate unumlocalia
+unumlocalia
 ```
 
-This will open a Napari window with SpatialBench docked on the side. Navigate to the **Settings** tab to load your dataset folder.
+This will open a Napari window with UnumLocalia docked on the side. Navigate to the **Settings** tab to load your dataset folder.
