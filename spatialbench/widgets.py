@@ -20,7 +20,7 @@ from PIL import Image
 from PIL import ImageDraw
 from PIL import ImageFont
 
-# CSV export
+# CSV export and session saving/loading
 from qtpy.QtWidgets import QFileDialog
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,18 @@ try:
 except Exception:
     _QT_AVAILABLE = False
     logger.warning("Qt not available. SpatialBench GUI cannot be displayed.")
+
+
+## Genes for side bar
+DEFAULT_FAVOURITE_GENES = [
+    "CD3E",
+    "CD4",
+    "CD8A",
+    "MS4A1",
+    "EPCAM",
+    "MKI67",
+    "PECAM1",
+]
 
 
 def _clear_layout(widget: QtWidgets.QWidget) -> None:
@@ -493,7 +505,14 @@ class CometChannelRow(QWidget):
         if core in self.loader.comet_thresholds:
             self.loader.comet_thresholds[core][self.marker] = (float(vmin), float(vmax))
 
-        if self.layers_tab is not None:
+        if (
+            self.layers_tab is not None
+            and not getattr(
+                self.layers_tab,
+                "_restoring_session",
+                False,
+            )
+        ):
             if self.vis_chk.isChecked():
                 self.layers_tab.active_proteins.add(self.marker)
             else:
@@ -875,9 +894,38 @@ class TranscriptChannelRow(QWidget):
         if self.layers_tab is not None:
             if self.vis_chk.isChecked():
                 self.layers_tab.active_genes.add(self.gene)
+
+                # Add genes to recent that aren't listed as a favourite gene
+                if self.gene not in DEFAULT_FAVOURITE_GENES:
+                    if self.gene in self.layers_tab.recent_genes:
+                        self.layers_tab.recent_genes.remove(
+                            self.gene
+                        )
+
+                    self.layers_tab.recent_genes.insert(
+                        0,
+                        self.gene,
+                    )
+
+                    self.layers_tab.recent_genes = (
+                        self.layers_tab.recent_genes[:15]
+                    )
+
+
                 self.layers_tab.active_gene_colors[self.gene] = self.color
+
+                try:
+                    self.layers_tab._refresh_gene_panels()
+                except Exception:
+                    pass
+                
             else:
                 self.layers_tab.active_genes.discard(self.gene)
+
+                try:
+                    self.layers_tab._refresh_gene_panels()
+                except Exception:
+                    pass
                 
         if not core:
             return
@@ -1143,6 +1191,10 @@ class TranscriptChannelRow(QWidget):
 class DataTab(QWidget):
     dataset_loaded = Signal(object)  # emits DatasetLoader
 
+    # Session save/load
+    session_save_requested = Signal()
+    session_load_requested = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
@@ -1169,6 +1221,19 @@ class DataTab(QWidget):
         self.log_area.setWordWrap(True)
         g_layout.addWidget(self.log_area)
 
+        # Session save/load
+        session_group = QGroupBox("Session")
+        session_layout = QVBoxLayout(session_group)
+        self.save_session_btn = QPushButton("Save Session")
+        self.load_session_btn = QPushButton("Load Session")
+        session_layout.addWidget(self.save_session_btn)
+        session_layout.addWidget(self.load_session_btn)
+        layout.addWidget(session_group)
+
+        self.save_session_btn.clicked.connect(self.session_save_requested)
+        self.load_session_btn.clicked.connect(self.session_load_requested)
+
+        # Keep at end of this section
         layout.addWidget(group)
         layout.addStretch()
 
@@ -1217,6 +1282,8 @@ class LayersTab(QWidget):
         self.active_genes = set()
         self.active_proteins = set()
 
+        self.recent_genes = []
+        self.protein_settings = {}
         self.active_gene_colors = {}
 
         self.he_visible = True #H&E shown between cores
@@ -1280,45 +1347,25 @@ class LayersTab(QWidget):
 
         btn_row = QHBoxLayout()
 
-        self.export_presentation_btn = QPushButton(
-            "Low Res"
-        )
+        self.export_presentation_btn = QPushButton("Low Res")
+        self.export_publication_btn = QPushButton("High Res")
 
-        self.export_publication_btn = QPushButton(
-            "High Res"
-        )
+        btn_row.addWidget(self.export_presentation_btn)
+        btn_row.addWidget(self.export_publication_btn)
+        export_layout.addLayout(btn_row)
 
-        btn_row.addWidget(
-            self.export_presentation_btn
-        )
-
-        btn_row.addWidget(
-            self.export_publication_btn
-        )
-
-        export_layout.addLayout(
-            btn_row
-        )
-
-        self.export_presentation_btn.clicked.connect(
-            lambda: self._export_image(scale=1)
-        )
-        self.export_publication_btn.clicked.connect(
-            lambda: self._export_image(scale=4)
-        )
+        self.export_presentation_btn.clicked.connect(lambda: self._export_image(scale=1))
+        self.export_publication_btn.clicked.connect(lambda: self._export_image(scale=4))
 
         layout.addWidget(export_group)
 
+        # Refresh for gene search panel
+        self._refreshing_gene_panels = False
+
         # Scale bar (for image export)
-        self.scalebar_chk = QCheckBox(
-            "Include scale bar"
-        )
-
+        self.scalebar_chk = QCheckBox("Include scale bar")
         self.scalebar_chk.setChecked(True)
-
-        export_layout.addWidget(
-            self.scalebar_chk
-        )
+        export_layout.addWidget(self.scalebar_chk)
 
         self.segmentation_rows = {}
         
@@ -1345,6 +1392,180 @@ class LayersTab(QWidget):
                     pass
         except Exception:
             pass
+        
+
+    ## Export settings
+    def export_state(self):
+        return {
+            "he_visible":
+                self.he_vis.isChecked(),
+
+            "he_opacity":
+                self.he_op.value(),
+
+            "active_core":
+                self.core_combo.currentText(),
+
+            "protein_settings": {
+                row.marker: {
+                    "visible":
+                        row.vis_chk.isChecked(),
+                    "colormap":
+                        row.cmap_cb.currentText(),
+                    "opacity":
+                        row.op_sl.value(),
+                    "vmin":
+                        row.vmin_sp.value(),
+                    "vmax":
+                        row.vmax_sp.value(),
+                }
+                for row in self.comet_rows
+            },
+
+            "recent_genes":
+                self.recent_genes,
+
+            "active_genes":
+                list(self.active_genes),
+
+            "active_gene_colors":
+                self.active_gene_colors,
+
+            "cell_boundary_color":
+                self.cell_boundary_color,
+
+            "cell_fill_enabled":
+                self.cell_fill_enabled,
+
+            "cell_fill_opacity_slider":
+                int(
+                    self.cell_fill_opacity * 100
+                ),
+
+            "cell_fill_color":
+                self.cell_fill_color,
+
+            "transcript_size":
+                self.tx_size.value()
+                if hasattr(self, "tx_size")
+                else 25.0,
+        }
+    
+
+    ## Import settings
+    def import_state(self, state):
+        self._restoring_session = True
+
+## DEBUG
+        print(
+            "IMPORTING:",
+            state.get("protein_settings")
+        )
+## ---
+
+
+
+
+
+        if "he_visible" in state:
+            self.he_vis.setChecked(
+                state["he_visible"]
+            )
+
+        if "he_opacity" in state:
+            self.he_op.setValue(
+                int(state["he_opacity"])
+            )
+        
+        self.protein_settings = state.get(
+            "protein_settings",
+            {}
+        )
+
+        self.active_proteins = {
+            marker
+            for marker, settings
+            in self.protein_settings.items()
+            if settings.get("visible", False)
+        }
+
+
+## DEBUG
+        print(
+            "AFTER IMPORT:",
+            self.active_proteins
+        )
+## ---
+
+        self.recent_genes = state.get(
+            "recent_genes",
+            [],
+        )
+
+        self.active_genes = set(
+            state.get(
+                "active_genes",
+                []
+            )
+        )
+
+        self.active_gene_colors = state.get(
+            "active_gene_colors",
+            {}
+        )
+
+        self.cell_boundary_color = state.get(
+            "cell_boundary_color",
+            "white",
+        )
+
+        self.cell_fill_enabled = state.get(
+            "cell_fill_enabled",
+            False,
+        )
+
+        self.cell_fill_opacity = (
+            state.get(
+                "cell_fill_opacity_slider",
+                20,
+            ) / 100
+        )
+
+        self.cell_fill_color = state.get(
+            "cell_fill_color",
+            "#ffff00",
+        )
+
+        if (
+            hasattr(self, "tx_size")
+            and "transcript_size" in state
+        ):
+            self.tx_size.setValue(
+                float(
+                    state["transcript_size"]
+                )
+            )
+
+        core = state.get(
+            "active_core"
+        )
+
+        if core:
+            self.core_combo.setCurrentText(
+                core
+            )
+
+        self._on_core_swapped(
+            self.core_combo.currentText()
+        )
+
+        try:
+            self._refresh_gene_panels()
+        except Exception:
+            pass
+
+        self._restoring_session = False
+    
 
     def populate(self, loader):
         """Called when dataset is loaded."""
@@ -1459,12 +1680,6 @@ class LayersTab(QWidget):
 
             gene_layout.addLayout(search_layout)
 
-            self.gene_count_label = QLabel()
-            gene_layout.addWidget(self.gene_count_label)
-
-            self.gene_limit_label = QLabel()
-            gene_layout.addWidget(self.gene_limit_label)
-
             # Gene dot sizes
             tx_size_layout = QHBoxLayout()
 
@@ -1490,11 +1705,19 @@ class LayersTab(QWidget):
 
             # Store full gene list
             self.all_genes = sorted(loader.genes)
+            self.favourite_genes_widget = QWidget()
+            self.favourite_genes_layout = QVBoxLayout(self.favourite_genes_widget)
+
+            self.active_genes_widget = QWidget()
+            self.active_genes_layout = QVBoxLayout(self.active_genes_widget)
+
+            self.recent_genes_widget = QWidget()
+            self.recent_genes_layout = QVBoxLayout(self.recent_genes_widget)
 
             # Container where matching rows will appear
             gene_scroll = QScrollArea()
             gene_scroll.setWidgetResizable(True)
-            gene_scroll.setMinimumHeight(250)
+            gene_scroll.setMaximumHeight(120)
 
             self.gene_rows_widget = QWidget()
             self.gene_rows_layout = QVBoxLayout(self.gene_rows_widget)
@@ -1506,10 +1729,21 @@ class LayersTab(QWidget):
 
             gene_layout.addWidget(gene_scroll)
 
+            # Gene order
+            gene_layout.addWidget(QLabel("Active Genes"))
+            gene_layout.addWidget(self.active_genes_widget)
+
+            gene_layout.addWidget(QLabel("Recent Genes"))
+            gene_layout.addWidget(self.recent_genes_widget)
+
+            gene_layout.addWidget(QLabel("Favourite Genes"))
+            gene_layout.addWidget(self.favourite_genes_widget)
+
             gene_layout.setContentsMargins(6, 6, 6, 6)
 
             # Populate initial view
             self._filter_genes("")
+            self._refresh_gene_panels()
 
             self.scroll_layout.addWidget(gene_group)
 
@@ -1823,20 +2057,55 @@ class LayersTab(QWidget):
         
         # Restore proteins
         for row in self.comet_rows:
-            try:
-                should_show = row.marker in self.active_proteins
+            settings = (
+                self.protein_settings.get(
+                    row.marker,
+                    {}
+                )
+            )
 
-                row.vis_chk.blockSignals(True)
-                row.vis_chk.setChecked(should_show)
-                row.vis_chk.blockSignals(False)
+            row.vis_chk.blockSignals(True)
+            row.cmap_cb.blockSignals(True)
+            row.op_sl.blockSignals(True)
 
-                row._on_change()
-            except Exception:
-                pass
+            row.vis_chk.setChecked(
+                settings.get(
+                    "visible",
+                    False
+                )
+            )
+
+            row.cmap_cb.setCurrentText(
+                settings.get(
+                    "colormap",
+                    "green"
+                )
+            )
+
+            row.op_sl.setValue(
+                settings.get(
+                    "opacity",
+                    80
+                )
+            )
+
+            row.vis_chk.blockSignals(False)
+            row.cmap_cb.blockSignals(False)
+            row.op_sl.blockSignals(False)
+
+            row._on_change()
+            
+
+## DEBUG
+        print(self.active_proteins)
+
+## ---
+
             
         # Restore genes
         for gene in self.active_genes:
             try:
+
                 row = TranscriptChannelRow(
                     gene,
                     self.sv,
@@ -1846,7 +2115,15 @@ class LayersTab(QWidget):
                 row.layers_tab = self
 
                 if gene in self.active_gene_colors:
-                    row.color = self.active_gene_colors[gene]
+                    row.color = (
+                        self.active_gene_colors[gene]
+                    )
+
+                row.color_btn.setStyleSheet(
+                    f"color: {row.color};"
+                    "font-weight: bold;"
+                    "font-size: 16px;"
+                )
 
                 row.vis_chk.setChecked(True)
 
@@ -1859,6 +2136,14 @@ class LayersTab(QWidget):
         try:
             for core_rows in self.segmentation_rows.values():
                 for row in core_rows.values():
+                    row.color = self.cell_boundary_color
+
+                    row.color_btn.setStyleSheet(
+                        f"color: {self.cell_boundary_color};"
+                        "font-weight: bold;"
+                        "font-size: 16px;"
+                    )
+
                     row.fill_chk.blockSignals(True)
 
                     if row.chk.isChecked():
@@ -1937,29 +2222,26 @@ class LayersTab(QWidget):
 
         text = text.strip().lower()
 
+        self._clear_qt_layout(
+            self.gene_rows_layout
+        )
+
+        if not text:
+            self.scroll_content.update()
+            return
+
         matches = [
             g
             for g in self.all_genes
             if text in g.lower()
         ]
 
-        self.gene_count_label.setText(
-            f"Showing {len(matches)} / {len(self.all_genes)} genes"
-        )
-
-        if len(matches) > 100:
-            self.gene_limit_label.setText(
-                "Refine search to view more genes"
-            )
-        else:
-            self.gene_limit_label.setText("")
-
         self.gene_rows_widget.setUpdatesEnabled(False)
 
         self._clear_qt_layout(self.gene_rows_layout)
 
         # Prevent huge result sets from generating thousands of widgets
-        MAX_VISIBLE_ROWS = 50
+        MAX_VISIBLE_ROWS = 25
 
         for gene in matches[:MAX_VISIBLE_ROWS]:
             row = TranscriptChannelRow(
@@ -1969,6 +2251,9 @@ class LayersTab(QWidget):
             )
 
             row.layers_tab = self
+
+            if gene in self.active_genes:
+                row.vis_chk.setChecked(True)
 
             self.gene_rows_layout.addWidget(row)
 
@@ -2333,6 +2618,100 @@ class LayersTab(QWidget):
             affine=M_com,
         )
 
+
+    ## Refresh function (repopulates layout)
+    def _refresh_gene_panels(self):
+        if self._refreshing_gene_panels:
+            return
+        
+        self._refreshing_gene_panels = True
+
+        # Favourite genes panel
+        self._clear_qt_layout(
+            self.favourite_genes_layout
+        )
+
+        try:
+            for gene in DEFAULT_FAVOURITE_GENES:
+
+                if gene not in self.all_genes:
+                    continue
+
+                row = TranscriptChannelRow(
+                    gene,
+                    self.sv,
+                    self.loader,
+                )
+
+                row.layers_tab = self
+
+                if gene in self.active_genes:
+                    row.vis_chk.blockSignals(True)
+                    row.vis_chk.setChecked(True)
+                    row.vis_chk.blockSignals(False)
+
+                self.favourite_genes_layout.addWidget(
+                    row
+                )
+
+            # Active genes panel
+            self._clear_qt_layout(
+                self.active_genes_layout
+            )
+
+            for gene in sorted(self.active_genes):
+
+                row = TranscriptChannelRow(
+                    gene,
+                    self.sv,
+                    self.loader,
+                )
+
+                row.layers_tab = self
+
+                if gene in self.active_gene_colors:
+                    row.color = self.active_gene_colors[gene]
+
+                row.color_btn.setStyleSheet(
+                    f"color: {row.color};"
+                    "font-weight: bold;"
+                    "font-size: 16px;"
+                )
+
+                row.vis_chk.blockSignals(True)
+                row.vis_chk.setChecked(True)
+                row.vis_chk.blockSignals(False)
+
+                self.active_genes_layout.addWidget(
+                    row
+                )
+
+            # Recent genes panel
+            self._clear_qt_layout(
+                self.recent_genes_layout
+            )
+
+            # Ensures favourite genes don't clutter "recent"
+            for gene in self.recent_genes:
+
+                if gene in DEFAULT_FAVOURITE_GENES:
+                    continue
+
+                row = TranscriptChannelRow(
+                    gene,
+                    self.sv,
+                    self.loader,
+                )
+
+                row.layers_tab = self
+
+                self.recent_genes_layout.addWidget(
+                    row
+                )
+        finally:
+            self._refreshing_gene_panels = False
+
+
 # Minimal helper tabs (kept for completeness)
 class CellQuantificationTab(QWidget):
     def __init__(self, sv, parent=None):
@@ -2502,6 +2881,175 @@ def launch():
     # wire dataset_loaded signal to layers_tab.populate
     data_tab.dataset_loaded.connect(layers_tab.populate)
     data_tab.dataset_loaded.connect(cell_quant_tab.set_loader)
+
+    ## Save session
+    def save_session():
+        if layers_tab.loader is None:
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            None,
+            "Save Session",
+            "analysis.ulproj",
+            "UnumLocalia Project (*.ulproj)"
+        )
+
+        if not path:
+            return
+
+        ui_state = layers_tab.export_state()
+
+        layers_tab.loader.save_session(
+            path,
+            ui_state,
+        )
+
+
+    ## Load session
+    def load_session():
+
+## DEBUG
+        print("LOAD SESSION CLICKED")
+## ---
+
+        
+        path, _ = QFileDialog.getOpenFileName(
+                None,
+                "Load Session",
+                "",
+                "UnumLocalia Project (*.ulproj)"
+            )
+
+
+        if not path:
+            return
+
+        import json
+
+        with open(path, "r") as f:
+            session = json.load(f)
+
+        dataset_folder = session.get(
+            "dataset_folder"
+        )
+
+        # Automatically reload dataset
+        from spatialbench.io import DatasetLoader
+
+        # Add loading message
+        import os
+
+        data_tab.log_area.setText(
+            f"Loading session: {os.path.basename(path)}"
+        )
+
+        QApplication.processEvents()
+
+        loader = DatasetLoader(
+            dataset_folder
+        ).load(
+            do_load_transcripts=False,
+            load_boundaries=True,
+            load_he=True,
+            load_comet=True,
+            load_adata=False,
+        )
+
+        loader.comet_thresholds = session.get(
+            "comet_thresholds",
+            {}
+        )
+
+        layers_tab.populate(loader)
+        cell_quant_tab.set_loader(loader)
+        layers_tab.loader = loader
+
+        #
+        # Restore imported segmentations
+        #
+        for core, methods in (
+            session.get(
+                "segmentations",
+                {}
+            ).items()
+        ):
+
+            for method_name, seg_path in (
+                methods.items()
+            ):
+
+                if (
+                    core not in
+                    layers_tab.loader.custom_segmentations
+                    or
+                    method_name not in
+                    layers_tab.loader.custom_segmentations.get(
+                        core,
+                        {}
+                    )
+                ):
+
+                    try:
+
+                        layers_tab.loader.load_custom_geojson(
+                            core,
+                            method_name,
+                            seg_path,
+                        )
+
+                        layers_tab._add_custom_segmentation_layer(
+                            core,
+                            method_name,
+                        )
+
+                        row = CellBoundaryRow(
+                            sv,
+                            layers_tab.loader,
+                            display_name=method_name,
+                            layer_suffix=f"segmentation::{method_name}",
+                        )
+
+                        row.layers_tab = layers_tab
+
+                        layers_tab.seg_rows_layout.addWidget(
+                            row
+                        )
+
+                        layers_tab.segmentation_rows.setdefault(
+                            core,
+                            {}
+                        )[method_name] = row
+
+                        row.chk.setChecked(True)
+
+                    except Exception:
+                        logger.exception(
+                            "Failed restoring segmentation"
+                        )
+
+## DEBUG
+        print(session["ui"])
+## ---
+
+
+
+
+        layers_tab.import_state(
+            session.get(
+                "ui",
+                {}
+            )
+        )
+
+        # Add message once session is loaded (stating what was loaded)
+        data_tab.log_area.setText(
+            loader.manifest.summary()
+        )
+
+        layers_tab._on_core_swapped(layers_tab.core_combo.currentText())
+
+    data_tab.session_save_requested.connect(save_session)
+    data_tab.session_load_requested.connect(load_session)
 
     tabs = QTabWidget()
     tabs.addTab(data_tab, "Data")

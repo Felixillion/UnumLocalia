@@ -1284,4 +1284,47 @@ class DatasetLoader:
         )
 
         return shapes_napari
+    
+
+    ## Save session
+    def save_session(self, path, ui_state):
+
+        session = {
+            "dataset_folder": str(self.folder),
+
+            "comet_thresholds": self.comet_thresholds,
+
+            "segmentations": {
+                core: {
+                    method: seg["path"]
+                    for method, seg in methods.items()
+                }
+                for core, methods
+                in self.custom_segmentations.items()
+            },
+
+            "ui": ui_state,
+        }
+
+        with open(path, "w") as f:
+            json.dump(
+                session,
+                f,
+                indent=2,
+            )
+
+
+    ## Load session
+    def load_session(self,path):
+        with open(path, "r") as f:
+            session = json.load(f)
+
+        self.comet_thresholds = session.get(
+            "comet_thresholds",
+            {}
+        )
+
+        return session
+
+
         
