@@ -2856,24 +2856,20 @@ class CellQuantificationTab(QWidget):
 
 
     def refresh(self):
-            if self.loader is None:
-                return
 
-            core = self.core_combo.currentText()
+        if self.loader is None:
+            return
 
-            self.seg_combo.clear()
+        core = self.core_combo.currentText()
 
-            # Xenium segmentation
-            if core in self.loader.cell_boundaries_df:
-                self.seg_combo.addItem("cells")
+        self.seg_combo.clear()
 
-            # User imported segmentations
-            for name in (
-                self.loader
-                .custom_segmentations
-                .get(core, {})
-            ):
-                self.seg_combo.addItem(name)
+        for name in sorted(
+            self.loader
+            .custom_segmentations
+            .get(core, {})
+        ):
+            self.seg_combo.addItem(name)
 
 
 # ---------------------------------------------------------------------------
