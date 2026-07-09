@@ -1180,11 +1180,6 @@ class TranscriptChannelRow(QWidget):
                 self.sv.refresh_transcript_layers()
         except Exception:
             pass
-        try:
-            if hasattr(self.sv, "reset_view"):
-                self.sv.reset_view()
-        except Exception:
-            pass
 
 
 ## Tab with data selection/loading
@@ -1685,7 +1680,19 @@ class LayersTab(QWidget):
 
             tx_size_layout.addWidget(QLabel("Global Dot Size"))
 
+            # Text
             self.tx_size = QDoubleSpinBox()
+            self.tx_size.setFixedHeight(32)
+            self.tx_size.setStyleSheet("""
+            QDoubleSpinBox {
+                padding-top: 2px;
+                padding-bottom: 2px;
+            }
+            QDoubleSpinBox::up-button,
+            QDoubleSpinBox::down-button {
+                height: 14px;
+            }
+            """)
             self.tx_size.setRange(1.0, 100.0)
             self.tx_size.setValue(25.0)
             self.tx_size.setSingleStep(1.0)
