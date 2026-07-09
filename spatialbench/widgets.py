@@ -1366,6 +1366,11 @@ class LayersTab(QWidget):
         
 
     def _on_tx_size_changed(self, v):
+        if hasattr(self, "tx_size_label"):
+            self.tx_size_label.setText(
+                str(int(v))
+            )
+        
         try:
             self.sv.set_transcript_size(float(v))
         except Exception:
@@ -1536,7 +1541,7 @@ class LayersTab(QWidget):
             and "transcript_size" in state
         ):
             self.tx_size.setValue(
-                float(
+                int(
                     state["transcript_size"]
                 )
             )
@@ -1680,25 +1685,29 @@ class LayersTab(QWidget):
 
             tx_size_layout.addWidget(QLabel("Global Dot Size"))
 
-            # Text
-            self.tx_size = QDoubleSpinBox()
-            self.tx_size.setFixedHeight(32)
-            self.tx_size.setStyleSheet("""
-            QDoubleSpinBox {
-                padding-top: 2px;
-                padding-bottom: 2px;
-            }
-            QDoubleSpinBox::up-button,
-            QDoubleSpinBox::down-button {
-                height: 14px;
-            }
-            """)
-            self.tx_size.setRange(1.0, 100.0)
-            self.tx_size.setValue(25.0)
-            self.tx_size.setSingleStep(1.0)
-            self.tx_size.valueChanged.connect(self._on_tx_size_changed)
+            # Slider
+            self.tx_size = QSlider(Qt.Horizontal)
 
-            tx_size_layout.addWidget(self.tx_size)
+            self.tx_size.setRange(1, 100)
+            self.tx_size.setValue(25)
+
+            self.tx_size.valueChanged.connect(
+                self._on_tx_size_changed
+            )
+
+            self.tx_size_label = QLabel("25")
+            self.tx_size_label.setStyleSheet(
+                "font-weight: bold;"
+            )
+            self.tx_size_label.setMinimumWidth(35)
+
+            tx_size_layout.addWidget(
+                self.tx_size
+            )
+
+            tx_size_layout.addWidget(
+                self.tx_size_label
+            )
 
             gene_layout.addLayout(tx_size_layout)
 
@@ -2101,14 +2110,7 @@ class LayersTab(QWidget):
             row.op_sl.blockSignals(False)
 
             row._on_change()
-            
-
-## DEBUG
-        print(self.active_proteins)
-
-## ---
-
-            
+        
         # Restore genes
         for gene in self.active_genes:
             try:
@@ -2234,8 +2236,11 @@ class LayersTab(QWidget):
         )
 
         if not text:
+            self.gene_rows_widget.hide()
             self.scroll_content.update()
             return
+
+        self.gene_rows_widget.show()        
 
         matches = [
             g
@@ -2294,6 +2299,21 @@ class LayersTab(QWidget):
             return
 
         try:
+
+            current_size = float(
+                self.tx_size.value()
+            )
+
+            for layer in self.sv.viewer.layers:
+
+                try:
+
+                    if "::transcripts::" in layer.name:
+
+                        layer.size = current_size
+
+                except Exception:
+                    pass
 
             img = self.sv.viewer.screenshot(
                 canvas_only=True,
@@ -2656,6 +2676,15 @@ class LayersTab(QWidget):
                     row.vis_chk.blockSignals(True)
                     row.vis_chk.setChecked(True)
                     row.vis_chk.blockSignals(False)
+
+                if gene in self.active_gene_colors:
+                    row.color = self.active_gene_colors[gene]
+
+                    row.color_btn.setStyleSheet(
+                        f"color: {row.color};"
+                        "font-weight: bold;"
+                        "font-size: 16px;"
+                    )
 
                 self.favourite_genes_layout.addWidget(
                     row
