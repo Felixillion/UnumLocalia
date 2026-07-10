@@ -36,6 +36,38 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Normalise αSMA characterisation
+# ---------------------------------------------------------------------------
+
+def normalize_marker_name(name):
+
+    name = html.unescape(
+        str(name)
+    ).strip()
+
+    name = name.replace(
+        "#945;",
+        "α"
+    )
+
+    name = name.replace(
+        "&alpha;",
+        "α"
+    )
+
+    name = name.replace(
+        "αSMA",
+        "αSMA"
+    )
+
+    name = " ".join(
+        name.split()
+    )
+
+    return name
+
+
+# ---------------------------------------------------------------------------
 # CoreManifest & DatasetManifest
 # ---------------------------------------------------------------------------
 
@@ -430,9 +462,9 @@ class DatasetLoader:
                                 name_str = str(name).strip()
                                 if not name_str or "Unnamed" in name_str:
                                     continue
-                                name_str = html.unescape(name_str)
-                                if "#945;SMA" in name_str:
-                                    name_str = name_str.replace("#945;SMA", "αSMA")
+                                name_str = normalize_marker_name(
+                                    name_str
+                                )
                                 markers.append(name_str)
                                 try:
                                     min_val = float(mins_row[col_idx])
@@ -459,9 +491,7 @@ class DatasetLoader:
                         for ch in root_xml.findall(".//ome:Channel", ns):
                             name = ch.get("Name")
                             if name:
-                                name_str = html.unescape(name).strip()
-                                if "#945;SMA" in name_str:
-                                    name_str = name_str.replace("#945;SMA", "αSMA")
+                                name_str = normalize_marker_name(name)
                                 xml_markers.append(name_str)
 
                         if xml_markers:
