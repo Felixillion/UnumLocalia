@@ -23,6 +23,9 @@ from PIL import ImageFont
 # CSV export and session saving/loading
 from qtpy.QtWidgets import QFileDialog
 
+# JSON export for threshold data
+import json
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -2272,7 +2275,7 @@ class LayersTab(QWidget):
         filename, _ = QFileDialog.getSaveFileName(
             self,
             "Save Image",
-            "unumlocalia.png",
+            f"{self.sv.active_core}_screenshot.png",
             "PNG (*.png)"
         )
 
@@ -2774,11 +2777,17 @@ class CellQuantificationTab(QWidget):
         self.result_label = QLabel("No quantification run")
         layout.addWidget(self.result_label)
 
-        # Export CSV file
-        self.export_btn = QPushButton("Export CSV")
+        # Export CSV
+        self.export_btn = QPushButton("Export Quantification CSV")
         layout.addWidget(self.export_btn)
         self.export_btn.setEnabled(False)
         self.export_btn.clicked.connect(self._export_csv)
+
+        # Export Thresholds
+        self.export_thresholds_btn = QPushButton("Export Thresholds JSON")
+        layout.addWidget(self.export_thresholds_btn)
+        self.export_thresholds_btn.setEnabled(True)
+        self.export_thresholds_btn.clicked.connect(self._export_thresholds)
 
 
         self.last_core = None
@@ -2821,9 +2830,10 @@ class CellQuantificationTab(QWidget):
             self.last_method = method_name
 
             self.result_label.setText(
-                        f"{len(df):,} cells quantified"
+                        f"{len(df):,} cells quantified in {core}"
                     )
 
+            # button becomes available only after quantification has been run
             self.export_btn.setEnabled(True)
 
         except Exception as e:
@@ -2841,7 +2851,7 @@ class CellQuantificationTab(QWidget):
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Export Quantification",
-            "quantification.csv",
+            f"{self.last_core}_quantification_cells.csv",
             "CSV (*.csv)"
         )
 
@@ -2852,6 +2862,60 @@ class CellQuantificationTab(QWidget):
             self.last_core,
             self.last_method,
             path,
+        )
+
+
+    ## Export thresholds as JSON file
+    def _export_thresholds(self):
+
+        core = self.core_combo.currentText()
+
+        if not core:
+            return
+
+        thresholds = (
+            self.loader.comet_thresholds.get(
+                core,
+                {}
+            )
+        )
+
+        output = {
+            "core": core,
+            "version": "1.0",
+            "proteins": {},
+        }
+
+        for marker, values in thresholds.items():
+
+            vmin, vmax = values
+
+            output["proteins"][marker] = {
+                "threshold": float(vmin),
+                "display_max": float(vmax),
+                "method": "manual",
+            }
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Thresholds",
+            f"{core}_thresholds.json",
+            "JSON (*.json)"
+        )
+
+        if not path:
+            return
+
+        with open(path, "w") as f:
+
+            json.dump(
+                output,
+                f,
+                indent=4,
+            )
+
+        self.result_label.setText(
+            f"Exported thresholds for {core}"
         )
 
 
@@ -2870,6 +2934,20 @@ class CellQuantificationTab(QWidget):
             .get(core, {})
         ):
             self.seg_combo.addItem(name)
+
+        # Ensure "Run Cell Quantification" only when a segmentation is available
+        has_segmentation = (
+            self.seg_combo.count() > 0
+        )
+
+        self.run_btn.setEnabled(
+            has_segmentation
+        )
+
+        if not has_segmentation:
+            self.result_label.setText(
+                "No segmentation available"
+            )
 
 
 # ---------------------------------------------------------------------------
