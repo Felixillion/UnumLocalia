@@ -93,7 +93,7 @@ All files are auto-detected — no manual configuration required.
 
 ```bash
 git clone https://github.com/Felixillion/UnumLocalia.git
-cd UnumLocalia
+cd UnumLocalia   # set folder location
 ```
 
 ### 2. Create the mamba environment
