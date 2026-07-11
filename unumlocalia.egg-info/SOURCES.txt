@@ -2,15 +2,8 @@ LICENSE
 README.md
 pyproject.toml
 setup.py
-tests/__init__.py
-tests/test_analysis.py
-tests/test_benchmark.py
-tests/test_io.py
-tests/test_segmentation.py
-tests/test_utils.py
 unumlocalia/__init__.py
 unumlocalia/__main__.py
-unumlocalia/analysis.py
 unumlocalia/io.py
 unumlocalia/utils.py
 unumlocalia/viewer.py

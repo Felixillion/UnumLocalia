@@ -80,7 +80,6 @@ class CoreManifest:
     comet_file: Optional[Path] = None
     comet_thresholds: Optional[Path] = None
     he_file: Optional[Path] = None
-    anndata_file: Optional[Path] = None
     xenium_folder: Optional[Path] = None
 
     alignment_comet: Optional[Path] = None
@@ -111,7 +110,6 @@ class DatasetManifest:
             lines.append(f"      H&E       : {'✓' if core.he_file else '✗'}")
             lines.append(f"      COMET     : {'✓' if core.comet_file else '✗'}")
             lines.append(f"      Xenium    : {'✓' if core.xenium_folder else '✗'}")
-            lines.append(f"      AnnData   : {'✓' if core.anndata_file else '✗'}")
         return "\n".join(lines)
 
 
@@ -150,9 +148,6 @@ def detect_files(folder: Path) -> DatasetManifest:
 
         if 'he_file' in row and pd.notna(row['he_file']):
             core.he_file = (folder / str(row['he_file'])).resolve()
-
-        if 'anndata_file' in row and pd.notna(row['anndata_file']):
-            core.anndata_file = (folder / str(row['anndata_file'])).resolve()
 
         if 'alignment_comet' in row and pd.notna(row['alignment_comet']):
             core.alignment_comet = (folder / str(row['alignment_comet'])).resolve()
@@ -331,8 +326,6 @@ class DatasetLoader:
         self.comet_arrays: Dict[str, np.ndarray] = {}
         self.comet_markers: Dict[str, List[str]] = {}
         self.comet_thresholds: Dict[str, Dict[str, Tuple[float, float]]] = {}
-
-        self.anndata_refs: Dict[str, Any] = {}
 
         # Lazy COMET handling: store paths and a small cache
         self.comet_paths_by_core: Dict[str, Path] = {}
@@ -529,14 +522,6 @@ class DatasetLoader:
                 self.comet_markers[core_id] = markers
                 self.comet_thresholds[core_id] = thresholds
                 all_proteins.update(markers)
-
-            # --- AnnData ---
-            if load_adata and core.anndata_file:
-                try:
-                    import anndata
-                    self.anndata_refs[core_id] = anndata.read_h5ad(core.anndata_file, backed="r")
-                except Exception as e:
-                    logger.warning("Failed to load AnnData for %s: %s", core_id, e)
 
             # --- Attempt to fit transcript affine from GeoJSON + Xenium boundaries ---
             # This is done after boundaries and transcripts are loaded for the core.

@@ -1270,7 +1270,6 @@ class DataTab(QWidget):
                 load_boundaries=True,         # keep for loading functions, but have cores load individually
                 load_he=True,                 # H&E
                 load_comet=True,              # COMET
-                load_adata=False,             # skip AnnData
             )
 
             self.log_area.setText(loader.manifest.summary())

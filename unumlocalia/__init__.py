@@ -21,20 +21,6 @@ except PackageNotFoundError:
 # Public API re-exports
 from unumlocalia.io import DatasetLoader, DatasetManifest, detect_files  # noqa: F401
 from unumlocalia.viewer import SpatialViewer  # noqa: F401
-from unumlocalia.analysis import (  # noqa: F401
-    prepare_modality,
-    run_pca,
-    run_neighbors,
-    run_umap,
-    run_leiden,
-    plot_umap,
-    plot_heatmap,
-    plot_dotplot,
-    plot_spatial_clusters,
-    measure_comet_intensities,
-    assign_xenium_transcripts,
-    build_anndata,
-)
 
 __all__ = [
     # io
@@ -43,17 +29,4 @@ __all__ = [
     "detect_files",
     # viewer
     "SpatialViewer",
-    # analysis
-    "prepare_modality",
-    "run_pca",
-    "run_neighbors",
-    "run_umap",
-    "run_leiden",
-    "plot_umap",
-    "plot_heatmap",
-    "plot_dotplot",
-    "plot_spatial_clusters",
-    "measure_comet_intensities",
-    "assign_xenium_transcripts",
-    "build_anndata",
 ]

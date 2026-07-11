@@ -73,7 +73,6 @@ dataset/
             nucleus_boundaries.parquet
             transcripts.parquet
         
-        core01_anndata.h5ad
     core02_non_tumour/
         (same as core01)
     core03_tonsil/
