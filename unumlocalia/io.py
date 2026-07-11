@@ -34,6 +34,14 @@ from scipy import ndimage
 
 logger = logging.getLogger(__name__)
 
+BAD_GENE_PREFIXES = (
+    "DeprecatedCodeword",
+    "NegControlCodeword",
+    "UnassignedCodeword",
+    "NegControlProbe",
+    "Intergenic",
+)
+
 
 # ---------------------------------------------------------------------------
 # Normalise αSMA characterisation
@@ -532,16 +540,10 @@ class DatasetLoader:
                 logger.debug("GeoJSON affine fit skipped or failed for core %s", core_id)
 
         # Filter genes to remove control/deprecated codewords
-        bad_prefixes = (
-            "DeprecatedCodeword",
-            "NegControlCodeword",
-            "UnassignedCodeword",
-            "NegControlProbe",
-            "Intergenic"
-        )
         self.genes = sorted(
             g for g in all_genes
-            if isinstance(g, str) and not any(g.startswith(p) for p in bad_prefixes)
+            if isinstance(g, str)
+            and not any(g.startswith(p) for p in BAD_GENE_PREFIXES)
         )
         self.proteins = sorted(list(all_proteins))
 
@@ -1209,6 +1211,14 @@ class DatasetLoader:
                 "y_location",
             ],
         )
+
+        # Remove Xenium control probes and non-biological features
+        df_tx = df_tx[
+            ~df_tx["feature_name"].astype(str).str.startswith(
+                BAD_GENE_PREFIXES,
+                na=False,
+            )
+        ]
 
         coords = df_tx[
             ["x_location", "y_location"]
