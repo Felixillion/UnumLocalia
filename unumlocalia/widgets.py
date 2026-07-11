@@ -243,7 +243,13 @@ class CellBoundaryRow(QWidget):
             self.opacity_sl.setEnabled(False)
             self.fill_color_btn.setEnabled(False)
 
-            self.info_lbl.setText("")
+            if hasattr(self, "layers_tab"):
+                if self.layers_tab.cell_boundaries_visible:
+                    self.info_lbl.setText(
+                        "saved in session"
+                    )
+                else:
+                    self.info_lbl.setText("")
 
 
     def _on_toggle(self, checked: bool):
@@ -491,7 +497,6 @@ class CometChannelRow(QWidget):
             self.vmax_sp.setValue(int(thresh[1]))
         finally:
             self._updating_ui = False
-            self._on_change()
 
     def _on_change(self, *args):
         if self._updating_ui:
@@ -530,6 +535,16 @@ class CometChannelRow(QWidget):
             opacity=self.op_sl.value() / 100.0,
             visible=self.vis_chk.isChecked()
         )
+
+        if self.layers_tab is not None:
+            self.layers_tab.protein_settings[
+                self.marker
+            ] = {
+                "colormap": self.cmap_cb.currentText(),
+                "opacity": self.op_sl.value(),
+                "vmin": self.vmin_sp.value(),
+                "vmax": self.vmax_sp.value(),
+            }
 
 
 def _apply_affine_to_coords(M: np.ndarray, coords: np.ndarray) -> np.ndarray:
@@ -1452,6 +1467,10 @@ class LayersTab(QWidget):
                 self.tx_size.value()
                 if hasattr(self, "tx_size")
                 else 25.0,
+
+            # Is a cell mask active?
+            "cell_boundaries_visible":
+                self.cell_boundaries_visible,
         }
     
 
@@ -1529,6 +1548,11 @@ class LayersTab(QWidget):
                     state["transcript_size"]
                 )
             )
+
+        self.cell_boundaries_visible = state.get(
+            "cell_boundaries_visible",
+            False,
+        )
 
         core = state.get(
             "active_core"
@@ -2012,6 +2036,7 @@ class LayersTab(QWidget):
 
     def _on_core_swapped(self, core: str):
         """Called when the active core selection changes."""
+
         try:
             # update viewer state via sv helper if available
             try:
@@ -2030,7 +2055,7 @@ class LayersTab(QWidget):
                     pass
         except Exception:
             pass
-
+        
         try:
             for r in self.gene_rows:
                 try:
@@ -2069,10 +2094,7 @@ class LayersTab(QWidget):
             row.op_sl.blockSignals(True)
 
             row.vis_chk.setChecked(
-                settings.get(
-                    "visible",
-                    False
-                )
+                row.marker in self.active_proteins
             )
 
             row.cmap_cb.setCurrentText(
