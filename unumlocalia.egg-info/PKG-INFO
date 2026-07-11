@@ -23,10 +23,7 @@ Dynamic: requires-python
 
 # UnumLocalia
 
-**UnumLocalia** is an open-source Python toolkit accompanying multimodal spatial biology datasets.
-It provides a simple, reproducible environment for visualisation, exploration,
-segmentation benchmarking, and basic single-cell analysis — all without modifying
-your original data.
+**UnumLocalia** is an open-source Python toolkit for visualising, exploring, and quantifying multimodal spatial biology datasets. It provides an interactive environment for viewing H&E images, COMET protein imaging, Xenium transcripts, and cell segmentations, while supporting cell quantification, segmentation benchmarking, and reproducible analysis workflows — all without modifying the original data.
 
 ---
 
@@ -51,25 +48,29 @@ python -m pip install --upgrade pip setuptools wheel build
 python -m pip install -e .
 ```
 
-3. **Download the dataset and launch the GUI**
+3. **Download the example dataset and launch UnumLocalia**
     - Download the dataset ZIP from the DOI listed below and extract it to a folder, for example ~/UnumLocalia-dataset.
     - Launch UnumLocalia:
     ```bash
     mamba activate unumlocalia
     unumlocalia
     ```
-    - In the app, click File → Load dataset and select the dataset root folder.
+    - In the Data tab, click **Browse**, select the dataset folder, then click **Load Dataset (Manifest)**.
+
+Example datasets are hosted on Zenodo:
+DOI: <INSERT DOI>
 
 ---
 
 ## Features
 
 | Module | Functionality |
-|---|---|
+|----------|----------|
 | **Viewer** | Interactive napari viewer for H&E, COMET, Xenium transcripts, and cell boundaries |
-| **Segmentation** | Load label masks (GeoJSON files) |
-| **Cell Quanfication** | Measure COMET intensities, assign transcripts |
-| **Export** | Figures (PNG), cell quantification (CSV) |
+| **Segmentation** | Load Xenium boundaries or import custom GeoJSON segmentations |
+| **Cell Quantification** | Quantify COMET intensities and transcript counts within segmentations |
+| **Export** | Save figures (PNG), thresholds (JSON), quantified cells (CSV), and analysis sessions |
+| **Session Management** | Save and reload complete analysis sessions |
 
 ---
 
@@ -115,14 +116,14 @@ All files are auto-detected — no manual configuration required.
 
 ```bash
 git clone https://github.com/Felixillion/UnumLocalia.git
-cd UnumLocalia
+cd UnumLocalia   # set folder location
 ```
 
-### 2. Create the conda environment
+### 2. Create the mamba environment
 
 ```bash
-conda env create -f environment.yml
-conda activate unumlocalia
+mamba env create -f environment.yml
+mamba activate unumlocalia
 ```
 
 ### 3. Verify the installation
@@ -138,18 +139,17 @@ unumlocalia --version   # prints 1.0.0
 ### Launch the GUI
 
 ```bash
-conda activate unumlocalia
+mamba activate unumlocalia
 unumlocalia
 ```
 
 A napari window will open with the UnumLocalia panel docked on the right.
-Go to the **Settings** tab, select your dataset folder, and click **Load dataset**.
+Go to the **Data** tab, select your dataset folder, and click **Load dataset**.
 
 Alternatively, launch from Python:
 
 ```python
-from unumlocalia.widgets import launch
-launch()
+from unumlocalia.io import DatasetLoader
 ```
 
 ### Programmatic use
@@ -158,59 +158,28 @@ launch()
 from unumlocalia import DatasetLoader
 
 # Load dataset
-loader = DatasetLoader("/path/to/dataset")
-loader.load()
+loader = DatasetLoader("/path/to/dataset").load(
+    do_load_transcripts=False,
+    load_boundaries=True,
+    load_he=True,
+    load_comet=True,
+)
 
 # Inspect
 print(loader.manifest.summary())
-print(f"Genes: {len(loader.genes)}   Proteins: {len(loader.proteins)}")
-
-# Run analysis
-from unumlocalia import run_pca, run_umap, run_leiden, plot_umap
-
-adata = loader.anndata_ref
-run_pca(adata, modality="genes")
-run_umap(adata, modality="genes")
-run_leiden(adata, modality="genes", resolution=0.5)
-
-fig = plot_umap(adata, color="leiden_genes", modality="genes")
-fig.savefig("umap_clusters.png", dpi=150, bbox_inches="tight")
+print(f"Genes: {len(loader.genes)}")
+print(f"Proteins: {len(loader.proteins)}")
 ```
 
-### Benchmark a custom segmentation
+## Downstream analysis workflows
+UnumLocalia focuses on visualisation, segmentation import, and cell quantification.
 
-```python
-from unumlocalia import (
-    DatasetLoader,
-    load_segmentation,
-    measure_comet_intensities,
-    assign_xenium_transcripts,
-    build_anndata,
-    compare_segmentations,
-)
+Optional downstream analysis script is provided separately in:
 
-loader = DatasetLoader("/path/to/dataset").load()
-
-# Load user segmentation (label mask, GeoJSON, or QuPath JSON)
-labels = load_segmentation("/path/to/my_segmentation.tif")
-
-# Measure protein intensities
-comet_df = measure_comet_intensities(labels, loader.comet_arrays)
-
-# Assign transcripts
-tx_df = assign_xenium_transcripts(labels, loader.transcripts_df)
-
-# Build fresh AnnData
-adata_user = build_anndata(labels, comet_df, tx_df, loader.cells_df)
-
-# Compare clusterings
-from unumlocalia import compare_clusterings, plot_contingency
-results = compare_clusterings(
-    adata_original.obs["leiden_genes"],
-    adata_user.obs["leiden_genes"],
-)
-print(f"ARI: {results['ari']:.4f}   NMI: {results['nmi']:.4f}")
+```text
+analysis/
 ```
+This workflow is intentionally separated from the core package so that UnumLocalia remains lightweight and easy to install.
 
 ---
 
@@ -222,18 +191,39 @@ UnumLocalia/
 │   ├── __init__.py        ← Public API + version
 │   ├── io.py              ← Auto-detection, lazy loading, alignment
 │   ├── viewer.py          ← napari layer management + cell inspector
-│   ├── segmentation.py    ← Segmentation loading + AnnData construction
-│   ├── analysis.py        ← PCA, UMAP, Leiden, Scanpy wrappers
-│   ├── benchmark.py       ← ARI, NMI, Sankey, marker correlation
 │   ├── widgets.py         ← PyQt GUI panels
 │   └── utils.py           ← Shared math + export utilities
-├── examples/              ← Worked example scripts
-├── docs/                  ← Documentation
-├── tests/                 ← pytest test suite
-├── environment.yml        ← Conda environment
+│
+├── analysis/              ← Analysis workflow
+│   ├── clustering.py
+│   ├── requirements.txt
+│   ├── requirements.lock
+│   ├── environment.yml
+│   ├── README.md
+│
+├── environment.yml        ← Mamba environment
+├── README.md
+├── LICENSE
 ├── setup.py
 └── pyproject.toml
 ```
+
+---
+
+## Example data
+
+Example datasets, segmentation masks, alignment matrices, thresholds, and example exports are distributed separately through Zenodo.
+
+Large imaging data are not stored in the GitHub repository.
+
+The Zenodo archive contains:
+
+- Example datasets
+- OME-Zarr image data
+- Alignment matrices
+- Threshold files
+- Example segmentation masks
+- Example UnumLocalia projects
 
 ---
 
@@ -242,9 +232,9 @@ UnumLocalia/
 > Prioritise robustness, usability, and maintainability over the number of features.
 
 - **Never modifies raw data** — everything happens in memory.
-- **Lazy loading** — large TIFF images are memory-mapped; only requested tiles are read into RAM.
+- **Lazy loading** — large OME.ZARR images are memory-mapped; only requested tiles are read into RAM.
 - **Modular** — each module is independently importable and testable.
-- **Reproducible** — all analysis results can be exported to CSV, H5AD, or figures.
+- **Reproducible** — quantified cells, thresholds, sessions, and figures can be exported and shared.
 
 ---
 

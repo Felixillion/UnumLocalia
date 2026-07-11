@@ -2833,7 +2833,10 @@ class CellQuantificationTab(QWidget):
     def _run_quantification(self):
         core = self.core_combo.currentText()
 
-        method_name = self.seg_combo.currentText()
+        method_name = self.seg_combo.currentData()
+
+        if method_name is None:
+            method_name = self.seg_combo.currentText()
 
         if not method_name:
                 self.result_label.setText(
@@ -2949,12 +2952,24 @@ class CellQuantificationTab(QWidget):
 
         self.seg_combo.clear()
 
+        self.seg_combo.clear()
+
         for name in sorted(
             self.loader
             .custom_segmentations
             .get(core, {})
         ):
-            self.seg_combo.addItem(name)
+            # Change display name for segmentation calculation
+            display_name = (
+                "Xenium (default)"
+                if name == "cells"
+                else name
+            )
+
+            self.seg_combo.addItem(
+                display_name,
+                userData=name,
+            )
 
         # Ensure "Run Cell Quantification" only when a segmentation is available
         has_segmentation = (
