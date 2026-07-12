@@ -6,28 +6,31 @@ UnumLocalia — Analysis and visualization toolkit for multimodal spatial biolog
 # ENVIRONMENT SETUP
 # ------------------------------------------------------------
 
-# conda create -n unumlocalia_analysis python=3.11
-# conda activate unumlocalia_analysis
-
-# Standard install
-# pip install -r requirements.txt
-
-# Reproduce exact development environment
-# pip install -r requirements.lock
-
-# Save list of packages (and versions) as text file at lock file at pwd
-# pip freeze > requirements.txt
-# pip freeze > requirements.lock
+# Create and load installed environment
+# mamba env create -f environment.yml
+# mamba activate unumlocalia_analysis
 
 
 # ------------------------------------------------------------
 # USER INPUTS
 # ------------------------------------------------------------
 
+from pathlib import Path
+
 CORE_NAME = "core01"
 
-CSV_FILE = f"{CORE_NAME}_quantification_cells.csv"
-THRESHOLD_FILE = f"{CORE_NAME}_thresholds.json" #can be None if no thresholds are to be applied
+CSV_FILE = next(
+    Path(".").glob(
+        f"{CORE_NAME}*_quantification_cells.csv"
+    )
+)
+
+THRESHOLD_FILE = next(
+    Path(".").glob(
+        f"{CORE_NAME}*_thresholds.json"
+    ),
+    None,
+)
 
 OUTPUT_DIR = f"results_{CORE_NAME}"
 

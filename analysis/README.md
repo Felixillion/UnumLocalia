@@ -1,4 +1,4 @@
-# UnumLocalia Analysis Scripts
+# UnumLocalia Downstream Analysis
 
 This directory contains optional downstream analysis workflows for data exported from UnumLocalia.
 
@@ -35,7 +35,13 @@ UnumLocalia
 Example:
 
 ```text
-core01_quantification_cells.csv
+core01_hcc_quantification_cells.csv
+```
+
+Only the core identifier needs to be specified in `clustering.py`:
+
+```python
+CORE_NAME = "core01"
 ```
 
 ### Protein Threshold JSON (optional)
@@ -60,24 +66,27 @@ If supplied, protein measurements below the threshold are set to zero prior to a
 
 ## Installation
 
-Create a dedicated analysis environment:
+The recommended installation method uses Mamba, which is substantially faster than Conda for resolving scientific Python dependencies.
+
+If Mamba is not already installed:
 
 ```bash
-conda create -n unumlocalia_analysis python=3.11
-conda activate unumlocalia_analysis
+conda install -n base -c conda-forge mamba
 ```
 
-Install dependencies:
+Create the analysis environment:
 
 ```bash
-pip install -r requirements.txt
+mamba env create -f environment.yml
 ```
 
-To reproduce the exact development environment:
+Activate the environment:
 
 ```bash
-pip install -r requirements.lock
+mamba activate unumlocalia_analysis
 ```
+
+The environment definition is provided in `environment.yml` and includes all packages required for clustering, dimensionality reduction, visualisation, marker analysis, and cluster comparison.
 
 ---
 
@@ -93,14 +102,49 @@ and modify the user settings near the top of the file:
 
 ```python
 CORE_NAME = "core01"
-
-CSV_FILE = f"{CORE_NAME}_quantification_cells.csv"
-THRESHOLD_FILE = f"{CORE_NAME}_thresholds.json"
-
-OUTPUT_DIR = f"results_{CORE_NAME}"
 ```
 
+The workflow automatically searches the current directory for:
+
+```text
+core01*_quantification_cells.csv
+core01*_thresholds.json
+```
+
+and loads the matching files.
+
 The remaining parameters control quality filtering, dimensionality reduction, neighborhood construction, and clustering resolution.
+
+---
+
+## Quality Control
+
+The workflow applies default transcript-based quality control:
+
+```python
+MIN_GENES = 5
+MIN_TRANSCRIPTS = 20
+```
+
+Cells failing either threshold are excluded from transcript-based analyses.
+
+Protein analyses additionally require at least one non-zero protein measurement.
+
+Filtered cell tables are saved in:
+
+```text
+gene/cells_used.csv
+protein/cells_used.csv
+combined/cells_used.csv
+```
+
+## Notes
+
+- Xenium control probes and non-biological features (`NegControlProbe`, `NegControlCodeword`, `DeprecatedCodeword`, `Intergenic`, and related features) are excluded during cell quantification export.
+- DAPI is excluded from protein clustering by default.
+- Protein thresholds exported from UnumLocalia can be applied automatically.
+- All clustering analyses are deterministic when using the default random seed.
+- Generated `.h5ad` files can be loaded directly into Scanpy for additional downstream analysis.
 
 ---
 
@@ -238,15 +282,6 @@ results_coreXX/
     ├── merged/
     └── sankey/
 ```
-
----
-
-## Notes
-
-- DAPI is excluded from protein clustering by default.
-- Protein thresholds exported from UnumLocalia can be applied automatically.
-- All clustering analyses are deterministic when using the default random seed.
-- Generated `.h5ad` files can be loaded directly into Scanpy for additional downstream analysis.
 
 ---
 

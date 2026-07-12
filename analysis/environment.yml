@@ -1,0 +1,23 @@
+name: unumlocalia_analysis
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - scipy
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  - scanpy=1.11
+  - anndata=0.12
+  - python-igraph
+  - leidenalg
+  - pip
+
+  - pip:
+      - pacmap
+      - plotly
+      - kaleido
