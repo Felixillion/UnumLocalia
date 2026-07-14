@@ -727,19 +727,26 @@ elif THRESHOLD_FILE is not None:
         f"{THRESHOLD_FILE}"
     )
 
+all_protein_cols = [
+    c
+    for c in df.columns
+    if c.endswith("_mean")
+]
 
-if REMOVE_DAPI:
-    protein_cols = [
-        c
-        for c in protein_cols
-        if c != "DAPI_mean"
-    ]
+protein_cols = [
+    c
+    for c in all_protein_cols
+    if not (
+        REMOVE_DAPI
+        and c == "DAPI_mean"
+    )
+]
 
 gene_cols = [
     c
     for c in df.columns
     if c not in metadata_cols
-    and c not in protein_cols
+    and c not in all_protein_cols
 ]
 
 #
@@ -885,6 +892,7 @@ sc.tl.pca(
         2,
         gene_pca_comps,
     ),
+    random_state=RANDOM_STATE,
 )
 
 #
@@ -894,6 +902,7 @@ sc.pp.neighbors(
     gene_adata,
     n_neighbors=GENE_N_NEIGHBORS,
     n_pcs=GENE_N_PCS,
+    random_state=RANDOM_STATE,
 )
 
 sc.tl.umap(
@@ -1125,11 +1134,13 @@ sc.tl.pca(
         2,
         protein_pca_comps,
     ),
+    random_state=RANDOM_STATE,
 )
 
 sc.pp.neighbors(
     protein_adata,
     n_neighbors=PROTEIN_N_NEIGHBORS,
+    random_state=RANDOM_STATE,
 )
 
 sc.tl.umap(
@@ -1349,6 +1360,7 @@ n_comps = min(
 sc.tl.pca(
     combined_gene_adata,
     n_comps=n_comps,
+    random_state=RANDOM_STATE,
 )
 
 
@@ -1411,6 +1423,7 @@ combined_adata.obsm["spatial"] = (
 sc.pp.neighbors(
     combined_adata,
     n_neighbors=COMBINED_N_NEIGHBORS,
+    random_state=RANDOM_STATE,
 )
 
 sc.tl.umap(
