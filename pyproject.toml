@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "unumlocalia"
-version = "1.0.0"
+version = "1.0.1"
 description = "A multimodal spatial biology toolkit for visualisation, segmentation benchmarking, and single-cell analysis."
 readme = "README.md"
 license = {text = "MIT"}
@@ -30,7 +30,7 @@ Homepage = "https://github.com/Felixillion/UnumLocalia"
 Issues = "https://github.com/Felixillion/UnumLocalia/issues"
 
 [project.scripts]
-unumlocalia = "unumlocalia.widgets:launch"
+unumlocalia = "unumlocalia.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

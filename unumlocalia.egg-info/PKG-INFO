@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: unumlocalia
-Version: 1.0.0
+Version: 1.0.1
 Summary: A multimodal spatial biology toolkit for visualisation, segmentation benchmarking, and single-cell analysis.
 Home-page: https://github.com/Felixillion/UnumLocalia
 Author: UnumLocalia Contributors
@@ -134,6 +134,41 @@ unumlocalia --version   # prints 1.0.0
 
 ---
 
+## Updating
+
+To update an existing installation:
+
+```bash
+cd UnumLocalia
+
+git pull
+
+mamba activate unumlocalia
+mamba env update -f environment.yml --prune
+
+python -m pip install -e .
+```
+
+New releases may include additional functionality, bug fixes, or performance improvements. Users performing reproducible analyses are encouraged to record the UnumLocalia version used for data quantification and visualisation.
+
+---
+
+## Versioning
+
+UnumLocalia follows semantic versioning:
+
+- PATCH releases (1.0.0 → 1.0.1): bug fixes.
+- MINOR releases (1.0.0 → 1.1.0): new functionality.
+- MAJOR releases (1.x → 2.0): breaking changes.
+
+To check the installed version:
+
+```bash
+unumlocalia --version
+```
+
+---
+
 ## Quick start
 
 ### Launch the GUI
@@ -242,7 +277,7 @@ The Zenodo archive contains:
 
 If you use UnumLocalia in your research, please cite:
 
-> *UnumLocalia: an open-source toolkit for multimodal spatial biology benchmarking.*
+> *An open multimodal spatial resource integrating transcriptomics, proteomics and histology from the same tissue section.*
 > (manuscript in preparation)
 
 ---

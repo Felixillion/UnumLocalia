@@ -1105,7 +1105,14 @@ class TranscriptChannelRow(QWidget):
 
 
         try:
-            created_layer = self.sv.add_transcript_layer(core, self.gene, coords_world, self.color, True, affine=M_h)
+            created_layer = self.sv.add_transcript_layer(
+                core=core,
+                gene=self.gene,
+                coords=coords_world,
+                color=self.color,
+                visible=True,
+                affine=M_h,
+            )
         except Exception:
             # fallback if viewer helper fails
             try:
@@ -2320,6 +2327,7 @@ class LayersTab(QWidget):
                 except Exception:
                     pass
 
+            # Screenshot
             img = self.sv.viewer.screenshot(
                 canvas_only=True,
                 scale=scale,

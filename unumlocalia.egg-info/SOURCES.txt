@@ -4,6 +4,7 @@ pyproject.toml
 setup.py
 unumlocalia/__init__.py
 unumlocalia/__main__.py
+unumlocalia/cli.py
 unumlocalia/io.py
 unumlocalia/utils.py
 unumlocalia/viewer.py

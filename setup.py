@@ -9,7 +9,7 @@ with open("README.md", encoding="utf-8") as fh:
 
 setup(
     name="unumlocalia",
-    version="1.0.0",
+    version="1.0.1",
     author="UnumLocalia Contributors",
     description=(
         "A multimodal spatial biology toolkit for visualisation, "
@@ -39,7 +39,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "unumlocalia=unumlocalia.widgets:launch",
+            "unumlocalia=unumlocalia.cli:main",
         ],
     },
     classifiers=[

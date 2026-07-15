@@ -4,7 +4,6 @@ UnumLocalia
 A multimodal spatial biology toolkit for visualisation and single-cell analysis
 of paired Xenium, COMET, and H&E datasets.
 
-Version 1.0 — initial release.
 """
 
 from importlib.metadata import PackageNotFoundError, version as _version
