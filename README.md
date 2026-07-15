@@ -106,7 +106,7 @@ mamba activate unumlocalia
 ### 3. Verify the installation
 
 ```bash
-unumlocalia --version   # prints 1.0.0
+unumlocalia --version   # prints version
 ```
 
 ---

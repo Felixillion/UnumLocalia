@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: unumlocalia
-Version: 1.0.1
+Version: 1.1.0
 Summary: A multimodal spatial biology toolkit for visualisation, segmentation benchmarking, and single-cell analysis.
 Home-page: https://github.com/Felixillion/UnumLocalia
 Author: UnumLocalia Contributors
@@ -129,7 +129,7 @@ mamba activate unumlocalia
 ### 3. Verify the installation
 
 ```bash
-unumlocalia --version   # prints 1.0.0
+unumlocalia --version   # prints version
 ```
 
 ---

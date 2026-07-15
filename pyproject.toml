@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "unumlocalia"
-version = "1.0.1"
+version = "1.1.1"
 description = "A multimodal spatial biology toolkit for visualisation, segmentation benchmarking, and single-cell analysis."
 readme = "README.md"
 license = {text = "MIT"}

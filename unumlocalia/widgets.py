@@ -26,6 +26,9 @@ from qtpy.QtWidgets import QFileDialog
 # JSON export for threshold data
 import json
 
+# Suppress warnings
+import warnings
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -622,6 +625,11 @@ class TranscriptChannelRow(QWidget):
             if self.layers_tab is not None:
                 self.layers_tab.active_gene_colors[self.gene] = self.color
 
+            try:
+                self.layers_tab._refresh_gene_panels()
+            except Exception:
+                pass
+
             self.color_btn.setStyleSheet(f"color: {self.color}; font-weight: bold; font-size: 16px;")
             try:
                 core = getattr(self.sv, "active_core", None)
@@ -1154,16 +1162,18 @@ class TranscriptChannelRow(QWidget):
                 pass
 
         # Set size and refresh as before
-        size_val = 6.0
+        size_val = 25.0
+
         try:
-            if hasattr(self.sv, "_transcript_size"):
-                size_val = float(self.sv._transcript_size)
-            elif hasattr(self.sv, "transcript_size"):
-                size_val = float(getattr(self.sv, "transcript_size"))
-            else:
-                size_val = 25.0
+            if (
+                self.layers_tab is not None
+                and hasattr(self.layers_tab, "tx_size")
+            ):
+                size_val = float(
+                    self.layers_tab.tx_size.value()
+                )
         except Exception:
-            size_val = 25.0
+            pass
 
         try:
             try:
@@ -1366,15 +1376,12 @@ class LayersTab(QWidget):
 
         btn_row = QHBoxLayout()
 
-        self.export_presentation_btn = QPushButton("Low Res")
-        self.export_publication_btn = QPushButton("High Res")
+        self.export_btn = QPushButton("Export PNG")
 
-        btn_row.addWidget(self.export_presentation_btn)
-        btn_row.addWidget(self.export_publication_btn)
+        btn_row.addWidget(self.export_btn)
         export_layout.addLayout(btn_row)
 
-        self.export_presentation_btn.clicked.connect(lambda: self._export_image(scale=1))
-        self.export_publication_btn.clicked.connect(lambda: self._export_image(scale=4))
+        self.export_btn.clicked.connect(self._export_image)
 
         layout.addWidget(export_group)
 
@@ -2135,16 +2142,7 @@ class LayersTab(QWidget):
 
                 row.layers_tab = self
 
-                if gene in self.active_gene_colors:
-                    row.color = (
-                        self.active_gene_colors[gene]
-                    )
-
-                row.color_btn.setStyleSheet(
-                    f"color: {row.color};"
-                    "font-weight: bold;"
-                    "font-size: 16px;"
-                )
+                self._apply_saved_gene_color(row, gene,)
 
                 row.vis_chk.setChecked(True)
 
@@ -2152,7 +2150,14 @@ class LayersTab(QWidget):
 
             except Exception:
                 pass
-        
+
+        try:
+            self._on_tx_size_changed(
+                self.tx_size.value()
+            )
+        except Exception:
+            pass
+
         # Restore cell fill colour
         try:
             for core_rows in self.segmentation_rows.values():
@@ -2276,6 +2281,8 @@ class LayersTab(QWidget):
 
             row.layers_tab = self
 
+            self._apply_saved_gene_color(row, gene,)
+
             if gene in self.active_genes:
                 row.vis_chk.setChecked(True)
 
@@ -2299,7 +2306,7 @@ class LayersTab(QWidget):
 
 
     ## Add export method
-    def _export_image(self, scale=1):
+    def _export_image(self, checked=False):
         filename, _ = QFileDialog.getSaveFileName(
             self,
             "Save Image",
@@ -2327,17 +2334,49 @@ class LayersTab(QWidget):
                 except Exception:
                     pass
 
-            # Screenshot
-            img = self.sv.viewer.screenshot(
-                canvas_only=True,
-                scale=scale,
-            )
+            # Suppress deprecation warning from Napari regarding qt_viewer access
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="Public access to Window.qt_viewer is deprecated.*",
+                    category=FutureWarning,
+                )
+
+                img = self.sv.viewer.window.qt_viewer.canvas.native.grabFramebuffer()
+
+            img = img.convertToFormat(img.Format_RGBA8888)
+
+            width = img.width()
+            height = img.height()
+
+            ptr = img.bits()
+            ptr.setsize(height * width * 4)
+
+            img = np.frombuffer(ptr, np.uint8).reshape((height, width, 4))
+
+            # Upscale image for high-res export
+            im = Image.fromarray(img)
+
+            target_width = 4000
+
+            if im.width < target_width:
+                scale_factor = target_width / im.width
+
+                im = im.resize(
+                    (
+                        int(im.width * scale_factor),
+                        int(im.height * scale_factor),
+                    ),
+                    Image.Resampling.LANCZOS,
+                )
+
+            img = np.asarray(im)
 
             if self.scalebar_chk.isChecked():
 
                 img = self._add_scalebar(
                     img,
-                    scale=scale
+                    scale=1
                 )
 
             imwrite(
@@ -2377,9 +2416,17 @@ class LayersTab(QWidget):
             # Default scale-bar lengths
             zoom = self.sv.viewer.camera.zoom
 
-            canvas_width = (
-                self.sv.viewer.window.qt_viewer.canvas.size[0]
-            )
+            # Suppress deprecation warning from Napari regarding qt_viewer access
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="Public access to Window.qt_viewer is deprecated.*",
+                    category=FutureWarning,
+                )
+
+                canvas_width = (
+                    self.sv.viewer.window.qt_viewer.canvas.size[0]
+                )
 
             pixel_size_um = 0.2125
 
@@ -2421,18 +2468,12 @@ class LayersTab(QWidget):
             x2 = width - margin
             x1 = x2 - bar_px
 
-            y = height - margin
+            y = height - 80
 
             # black outline
-            outline_width = max(
-                12,
-                int(12 * scale)
-            )
+            outline_width = 20
 
-            inner_width = max(
-                6,
-                int(6 * scale)
-            )
+            inner_width = 10
 
             draw.line(
                 [(x1, y), (x2, y)],
@@ -2457,13 +2498,13 @@ class LayersTab(QWidget):
                 try:
                     font = ImageFont.truetype(
                         "Arial.ttf",
-                        int(30 * scale)
+                        60
                     )
                 except Exception:
                     try:
                         font = ImageFont.truetype(
                             "/System/Library/Fonts/Supplemental/Arial.ttf",
-                            int(40 * scale)
+                            60
                         )
                     except Exception:
                         font = ImageFont.load_default()
@@ -2472,10 +2513,7 @@ class LayersTab(QWidget):
 
             text_x = x1
 
-            text_y = (
-                y
-                - int(120 * scale)
-            )
+            text_y = y - 100
 
             # black outline text
             for dx in (-1, 0, 1):
@@ -2659,6 +2697,28 @@ class LayersTab(QWidget):
         )
 
 
+    ## Refreshing gene panels (favourite, active, recent)
+    def _apply_saved_gene_color(
+        self,
+        row,
+        gene,
+    ):
+        """
+        Restore the saved colour for a gene row.
+        """
+
+        if gene not in self.active_gene_colors:
+            return
+
+        row.color = self.active_gene_colors[gene]
+
+        row.color_btn.setStyleSheet(
+            f"color: {row.color};"
+            "font-weight: bold;"
+            "font-size: 16px;"
+        )
+
+
     ## Refresh function (repopulates layout)
     def _refresh_gene_panels(self):
         if self._refreshing_gene_panels:
@@ -2690,18 +2750,9 @@ class LayersTab(QWidget):
                     row.vis_chk.setChecked(True)
                     row.vis_chk.blockSignals(False)
 
-                if gene in self.active_gene_colors:
-                    row.color = self.active_gene_colors[gene]
+                self._apply_saved_gene_color(row, gene,)
 
-                    row.color_btn.setStyleSheet(
-                        f"color: {row.color};"
-                        "font-weight: bold;"
-                        "font-size: 16px;"
-                    )
-
-                self.favourite_genes_layout.addWidget(
-                    row
-                )
+                self.favourite_genes_layout.addWidget(row)
 
             # Active genes panel
             self._clear_qt_layout(
@@ -2718,14 +2769,7 @@ class LayersTab(QWidget):
 
                 row.layers_tab = self
 
-                if gene in self.active_gene_colors:
-                    row.color = self.active_gene_colors[gene]
-
-                row.color_btn.setStyleSheet(
-                    f"color: {row.color};"
-                    "font-weight: bold;"
-                    "font-size: 16px;"
-                )
+                self._apply_saved_gene_color(row, gene,)
 
                 row.vis_chk.blockSignals(True)
                 row.vis_chk.setChecked(True)
@@ -2754,9 +2798,9 @@ class LayersTab(QWidget):
 
                 row.layers_tab = self
 
-                self.recent_genes_layout.addWidget(
-                    row
-                )
+                self._apply_saved_gene_color(row, gene,)
+
+                self.recent_genes_layout.addWidget(row)
         finally:
             self._refreshing_gene_panels = False
 

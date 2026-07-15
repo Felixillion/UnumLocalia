@@ -19,7 +19,7 @@ dependencies:
   - scikit-image>=0.20
   - matplotlib>=3.7
   # Spatial biology
-  - napari=0.4.19
+  - napari=0.7.1
   - tifffile>=2023.1
   - anndata>=0.9
   - scanpy>=1.9
