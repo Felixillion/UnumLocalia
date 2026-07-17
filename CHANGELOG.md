@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.1.2
+
+### Fixed
+
+- Improved user interface, particularly around the protein and gene display.
+- Unselecting genes now actually unselects them (not just hides them).
+- Fixed up scroll area between proteins/genes and cell masks.
+
+### Added
+
+- Active and recent gene lists only appear after a relevant gene is selected.
+- Separate tabs for COMET proteins and Xenium genes to provide more space.
+- Search bar for proteins.
+- Unselect and reselect genes and proteins.
+
 ## v1.1.1
 
 ### Fixed

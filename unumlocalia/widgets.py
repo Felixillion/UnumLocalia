@@ -54,6 +54,7 @@ try:
         QTabWidget,
         QVBoxLayout,
         QWidget,
+        QSizePolicy,
     )
     _QT_AVAILABLE = True
 except Exception:
@@ -90,9 +91,9 @@ class CollapsibleGroup(QGroupBox):
     def __init__(self, title: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(title, parent)
         # Have tick box for sections
-        # self.setCheckable(True)
-        # self.setChecked(True)
-        # self.toggled.connect(self._on_toggle)
+        self.setCheckable(True)
+        self.setChecked(True)
+        self.toggled.connect(self._on_toggle)
 
     def _on_toggle(self, checked: bool) -> None:
         for child in self.findChildren(QWidget):
@@ -120,11 +121,14 @@ class CellBoundaryRow(QWidget):
         main_layout.addLayout(row1)
         main_layout.addLayout(row2)
 
+        main_layout.setSpacing(1)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
         # Row options
-        row1.setContentsMargins(0, 2, 0, 2)
+        row1.setContentsMargins(0, 0, 0, 0)
         row1.setSpacing(6)
 
-        row2.setContentsMargins(0, 2, 0, 2)
+        row2.setContentsMargins(0, 0, 0, 0)
         row2.setSpacing(6)
 
 
@@ -450,46 +454,104 @@ class CometChannelRow(QWidget):
 
         self.layers_tab = None
 
-        row = QHBoxLayout(self)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(2)
+        main_layout = QVBoxLayout(self)
 
+        # Row options
+        header_layout = QHBoxLayout()
+        advanced_layout = QVBoxLayout()
+
+        threshold_layout = QHBoxLayout()
+        opacity_layout = QHBoxLayout()
+
+        advanced_layout.addLayout(threshold_layout)
+        advanced_layout.addLayout(opacity_layout)
+
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(2)
+
+        advanced_layout.setContentsMargins(0, 0, 0, 0)
+        advanced_layout.setSpacing(2)
+
+        main_layout.addLayout(header_layout)
+
+        self.advanced_widget = QWidget()
+        self.advanced_widget.setLayout(advanced_layout)
+        main_layout.addWidget(self.advanced_widget)
+
+        # Marker
         self.vis_chk = QCheckBox(marker)
-        self.vis_chk.setFixedWidth(150)
+        self.vis_chk.setMinimumWidth(100)
+        self.vis_chk.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
         self.vis_chk.setChecked(False)
         self.vis_chk.toggled.connect(self._on_change)
-        row.addWidget(self.vis_chk)
 
+        # Colours
         self.cmap_cb = QComboBox()
         self.cmap_cb.addItems(self._COLORMAPS)
-        self.cmap_cb.setFixedWidth(75)
+        self.cmap_cb.setFixedWidth(55)
         self.cmap_cb.currentTextChanged.connect(self._on_change)
-        row.addWidget(self.cmap_cb)
 
+        # Thresholds
         self.vmin_sp = QSpinBox()
         self.vmin_sp.setRange(0, 65535)
-        self.vmin_sp.setFixedWidth(60)
+        self.vmin_sp.setFixedWidth(50)
         self.vmin_sp.valueChanged.connect(self._on_change)
-        row.addWidget(QLabel("Min"))
-        row.addWidget(self.vmin_sp)
 
         self.vmax_sp = QSpinBox()
         self.vmax_sp.setRange(0, 65535)
-        self.vmax_sp.setFixedWidth(60)
+        self.vmax_sp.setFixedWidth(50)
         self.vmax_sp.valueChanged.connect(self._on_change)
-        row.addWidget(QLabel("Max"))
-        row.addWidget(self.vmax_sp)
 
+        # Opacity
         self.op_sl = QSlider(Qt.Horizontal)
         self.op_sl.setRange(0, 100)
         self.op_sl.setValue(80)
-        self.op_sl.setFixedWidth(60)
+        self.op_sl.setMinimumWidth(120)
+        self.op_sl.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
         self.op_sl.valueChanged.connect(self._on_change)
-        row.addWidget(QLabel("α"))
-        row.addWidget(self.op_sl)
 
-        self.setLayout(row)
+        # Advanced layout: threshold and opacity
+        threshold_layout.addWidget(QLabel("Min"))
+        threshold_layout.addWidget(self.vmin_sp)
+        threshold_layout.addWidget(QLabel("Max"))
+        threshold_layout.addWidget(self.vmax_sp)
+
+        opacity_layout.addWidget(QLabel("α"))
+        opacity_layout.addWidget(self.op_sl)
+
+        # Initially hide advanced layout
+        self.advanced_widget.hide()
+
+        # Expand button
+        self.expand_btn = QPushButton("▶")
+        self.expand_btn.setFixedSize(18, 18)
+        self.expand_btn.setStyleSheet("padding: 0px;")
+        
+        self._expanded = False
+        self.expand_btn.clicked.connect(self._toggle_advanced)
+
+        # Header layout: visibility checkbox + colormap combobox
+        header_layout.addWidget(self.expand_btn)
+        header_layout.addWidget(self.vis_chk)
+        header_layout.addWidget(self.cmap_cb)
+        header_layout.setStretch(1, 1)
+
         self._updating_ui = False
+
+
+    ## Toggle protein advanced info
+    def _toggle_advanced(self):
+
+        self._expanded = (not self._expanded)
+        self.advanced_widget.setVisible(self._expanded)
+        self.expand_btn.setText("▼" if self._expanded else "▶")
+
 
     def sync_to_core(self, core: str):
         """When core swaps, load the saved vmin/vmax for this core and apply."""
@@ -548,6 +610,17 @@ class CometChannelRow(QWidget):
                 "vmin": self.vmin_sp.value(),
                 "vmax": self.vmax_sp.value(),
             }
+
+        if (
+            self.layers_tab is not None
+            and not getattr(
+                self.layers_tab,
+                "_restoring_session",
+                False,
+            )
+            and not self.layers_tab._hiding_proteins
+        ):
+            self.layers_tab._update_protein_button()
 
 
 def _apply_affine_to_coords(M: np.ndarray, coords: np.ndarray) -> np.ndarray:
@@ -941,7 +1014,13 @@ class TranscriptChannelRow(QWidget):
                 self.layers_tab.active_gene_colors[self.gene] = self.color
 
                 try:
-                    self.layers_tab._refresh_gene_panels()
+                    if not getattr(
+                        self.layers_tab,
+                        "_restoring_genes",
+                        False,
+                    ):
+                        self.layers_tab._refresh_gene_panels()
+                        self.layers_tab._update_gene_button()
                 except Exception:
                     pass
                 
@@ -949,7 +1028,13 @@ class TranscriptChannelRow(QWidget):
                 self.layers_tab.active_genes.discard(self.gene)
 
                 try:
-                    self.layers_tab._refresh_gene_panels()
+                    if not getattr(
+                        self.layers_tab,
+                        "_restoring_genes",
+                        False,
+                    ):
+                        self.layers_tab._refresh_gene_panels()
+                        self.layers_tab._update_gene_button()
                 except Exception:
                     pass
                 
@@ -1347,19 +1432,11 @@ class LayersTab(QWidget):
         he_layout.addWidget(self.he_op)
 
         # 3. Scrollable Markers
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-
         self.scroll_content = QWidget()
-
         self.scroll_layout = QVBoxLayout(self.scroll_content)
-
         self.scroll_layout.setContentsMargins(0, 0, 0, 0)
         self.scroll_layout.setSpacing(4)
-
-        scroll.setWidget(self.scroll_content)
-
-        layout.addWidget(scroll)
+        layout.addWidget(self.scroll_content)
 
         # Cell border colour
         self.cell_boundary_color = "white"
@@ -1372,28 +1449,43 @@ class LayersTab(QWidget):
 
         # Export image
         export_group = QGroupBox("Export PNG")
-        export_layout = QVBoxLayout(export_group)
+        export_layout = QHBoxLayout(export_group)
 
-        btn_row = QHBoxLayout()
+        self.export_btn = QPushButton(
+            "Export PNG"
+        )
 
-        self.export_btn = QPushButton("Export PNG")
+        self.scalebar_chk = QCheckBox(
+            "Scale bar"
+        )
 
-        btn_row.addWidget(self.export_btn)
-        export_layout.addLayout(btn_row)
+        export_layout.addWidget(self.export_btn)
+
+        export_layout.addStretch()
+
+        export_layout.addWidget(self.scalebar_chk)
+
+        self.scalebar_chk.setChecked(True)
 
         self.export_btn.clicked.connect(self._export_image)
 
         layout.addWidget(export_group)
 
+        self.segmentation_rows = {}
+
+        # Hide/restore genes
+        self.hidden_genes = set()
+
+        # Hide/restore proteins
+        self.hidden_proteins = set()
+
         # Refresh for gene search panel
         self._refreshing_gene_panels = False
 
-        # Scale bar (for image export)
-        self.scalebar_chk = QCheckBox("Include scale bar")
-        self.scalebar_chk.setChecked(True)
-        export_layout.addWidget(self.scalebar_chk)
+        # Hide proteins
+        self._hiding_proteins = False
 
-        self.segmentation_rows = {}
+        self._restoring_genes = False
         
 
     def _on_tx_size_changed(self, v):
@@ -1622,8 +1714,8 @@ class LayersTab(QWidget):
 
         seg_scroll.setWidgetResizable(True)
 
-        seg_scroll.setMinimumHeight(120)
-        seg_scroll.setMaximumHeight(220)
+        seg_scroll.setMinimumHeight(60)
+        seg_scroll.setMaximumHeight(120)
 
         seg_scroll.setWidget(
             self.seg_rows_container
@@ -1649,12 +1741,45 @@ class LayersTab(QWidget):
         mask_layout.setContentsMargins(6, 6, 6, 6)
 
         self.scroll_layout.addWidget(mask_group)
+        self.marker_tabs = QTabWidget()
 
         # --- COMET PROTEINS ---
+        comet_page = None
+
         # COMET controls
         if loader.proteins:
-            comet_group = CollapsibleGroup("COMET Proteins")
-            comet_layout = QVBoxLayout(comet_group)
+            comet_page = QWidget()
+            comet_layout = QVBoxLayout(comet_page)
+
+            # Protein search box
+            comet_search_layout = QHBoxLayout()
+
+            self.comet_search = QLineEdit()
+            self.comet_search.setPlaceholderText(
+                "Search proteins..."
+            )
+
+            self.comet_search.textChanged.connect(
+                self._filter_proteins
+            )
+
+            self.comet_clear_btn = QPushButton("✕")
+            self.comet_clear_btn.setFixedWidth(30)
+            self.comet_clear_btn.clicked.connect(
+                self.comet_search.clear
+            )
+
+            comet_search_layout.addWidget(
+                self.comet_search
+            )
+
+            comet_search_layout.addWidget(
+                self.comet_clear_btn
+            )
+
+            comet_layout.addLayout(
+                comet_search_layout
+            )
             
             comet_scroll = QScrollArea()
             comet_scroll.setWidgetResizable(True)
@@ -1664,26 +1789,41 @@ class LayersTab(QWidget):
 
             comet_scroll.setWidget(comet_widget)
 
-            comet_layout.addWidget(comet_scroll)
-
-            comet_group.setFont(QFont("", 9, QFont.Bold))
-
             for p in loader.proteins:
                 row = CometChannelRow(p, self.sv, self.loader)
                 row.layers_tab = self
                 self.comet_rows.append(row)
                 comet_inner_layout.addWidget(row)
 
-            self.scroll_layout.addWidget(comet_group)
             comet_layout.setContentsMargins(6, 6, 6, 6)
 
+            # Protein search
+            self.clear_protein_layers_btn = QPushButton()
+            self.clear_protein_layers_btn.setMaximumHeight(24)
+            self.clear_protein_layers_btn.setStyleSheet("font-size: 11px;")
+            self.clear_protein_layers_btn.hide()
+            self.clear_protein_layers_btn.clicked.connect(self._protein_button_clicked)
+            comet_layout.addWidget(self.clear_protein_layers_btn)
+
+            comet_layout.addWidget(comet_scroll)
+
         # --- XENIUM GENES ---
+        gene_page = None
+
         # Gene controls
         if loader.genes:
-            gene_group = CollapsibleGroup("Xenium Genes")
-            gene_layout = QVBoxLayout(gene_group)
-            gene_group.setFont(QFont("", 9, QFont.Bold))
-            gene_group.setStyleSheet("margin-top: 10px;")
+            gene_page = QWidget()
+            gene_page_layout = QVBoxLayout(gene_page)
+
+            gene_scroll = QScrollArea()
+            gene_scroll.setWidgetResizable(True)
+
+            gene_container = QWidget()
+            gene_layout = QVBoxLayout(gene_container)
+
+            gene_scroll.setWidget(gene_container)
+
+            gene_page_layout.addWidget(gene_scroll)
 
             # Search box
             search_layout = QHBoxLayout()
@@ -1734,27 +1874,58 @@ class LayersTab(QWidget):
 
             # Unselect genes
             self.clear_gene_layers_btn = QPushButton("Unselect All Genes")
-            self.clear_gene_layers_btn.clicked.connect(
-                self._unselect_all_genes
+            self.clear_gene_layers_btn.clicked.connect(self._gene_button_clicked)
+
+            self.clear_gene_layers_btn.setMaximumHeight(24)
+            self.clear_gene_layers_btn.setSizePolicy(
+                QSizePolicy.Preferred,
+                QSizePolicy.Fixed,
             )
+
+            self.clear_gene_layers_btn.setStyleSheet("font-size: 11px;")
+
+            self.clear_gene_layers_btn.hide()
 
             gene_layout.addWidget(self.clear_gene_layers_btn)
 
-            # Store full gene list
+            ## Store full gene list
             self.all_genes = sorted(loader.genes)
+
+            # Favourite genes
             self.favourite_genes_widget = QWidget()
             self.favourite_genes_layout = QVBoxLayout(self.favourite_genes_widget)
 
+            self.favourite_genes_layout.setContentsMargins(0, 0, 0, 0)
+            self.favourite_genes_layout.setSpacing(1)
+
+            # Active genes
             self.active_genes_widget = QWidget()
             self.active_genes_layout = QVBoxLayout(self.active_genes_widget)
 
+            self.active_genes_layout.setContentsMargins(0, 0, 0, 0)
+            self.active_genes_layout.setSpacing(1)
+
+            self.active_genes_scroll = QScrollArea()
+            self.active_genes_scroll.setWidgetResizable(True)
+            self.active_genes_scroll.setMaximumHeight(250)
+            self.active_genes_scroll.setWidget(self.active_genes_widget)
+
+            # Recent genes
             self.recent_genes_widget = QWidget()
             self.recent_genes_layout = QVBoxLayout(self.recent_genes_widget)
 
+            self.recent_genes_layout.setContentsMargins(0, 0, 0, 0,)
+            self.recent_genes_layout.setSpacing(1)
+
+            self.recent_genes_scroll = QScrollArea()
+            self.recent_genes_scroll.setWidgetResizable(True)
+            self.recent_genes_scroll.setMaximumHeight(100)
+            self.recent_genes_scroll.setWidget(self.recent_genes_widget)
+
             # Container where matching rows will appear
-            gene_scroll = QScrollArea()
-            gene_scroll.setWidgetResizable(True)
-            gene_scroll.setMaximumHeight(120)
+            self.gene_search_scroll = QScrollArea()
+            self.gene_search_scroll.setWidgetResizable(True)
+            self.gene_search_scroll.setMaximumHeight(120)
 
             self.gene_rows_widget = QWidget()
             self.gene_rows_layout = QVBoxLayout(self.gene_rows_widget)
@@ -1762,19 +1933,31 @@ class LayersTab(QWidget):
             self.gene_rows_layout.setContentsMargins(0, 0, 0, 0)
             self.gene_rows_layout.setSpacing(1)
 
-            gene_scroll.setWidget(self.gene_rows_widget)
+            self.gene_search_scroll.setWidget(self.gene_rows_widget)
+            gene_layout.addWidget(self.gene_search_scroll)
 
-            gene_layout.addWidget(gene_scroll)
+            # Starts hidden until user types in search box
+            self.gene_search_scroll.hide()
 
-            # Gene order
-            gene_layout.addWidget(QLabel("Active Genes"))
-            gene_layout.addWidget(self.active_genes_widget)
+            ## Gene order
+            # Active genes
+            self.active_group = CollapsibleGroup("Active Genes")
+            active_group_layout = QVBoxLayout(self.active_group)
+            active_group_layout.addWidget(self.active_genes_scroll)
 
-            gene_layout.addWidget(QLabel("Recent Genes"))
-            gene_layout.addWidget(self.recent_genes_widget)
+            # Recent genes
+            self.recent_group = CollapsibleGroup("Recent Genes")
+            recent_group_layout = QVBoxLayout(self.recent_group)
+            recent_group_layout.addWidget(self.recent_genes_scroll)
 
-            gene_layout.addWidget(QLabel("Favourite Genes"))
-            gene_layout.addWidget(self.favourite_genes_widget)
+            # Favourite genes
+            self.favourite_group = CollapsibleGroup("Favourite Genes")
+            favourite_group_layout = QVBoxLayout(self.favourite_group)
+            favourite_group_layout.addWidget(self.favourite_genes_widget)
+
+            gene_layout.addWidget(self.active_group)
+            gene_layout.addWidget(self.recent_group)
+            gene_layout.addWidget(self.favourite_group)
 
             gene_layout.setContentsMargins(6, 6, 6, 6)
 
@@ -1782,9 +1965,32 @@ class LayersTab(QWidget):
             self._filter_genes("")
             self._refresh_gene_panels()
 
-            self.scroll_layout.addWidget(gene_group)
+            self.marker_tabs.setDocumentMode(True)
 
         self.scroll_layout.addStretch()
+
+        # Add tabs to main scroll area
+        if comet_page is not None:
+            self.marker_tabs.addTab(
+                comet_page,
+                "COMET"
+            )
+
+        if gene_page is not None:
+            self.marker_tabs.addTab(
+                gene_page,
+                "Xenium"
+            )
+
+        if self.marker_tabs.count() > 0:
+            self.scroll_layout.addWidget(
+                self.marker_tabs
+            )
+
+        for i in range(self.marker_tabs.count()):
+            if self.marker_tabs.tabText(i) == "COMET":
+                self.marker_tabs.setCurrentIndex(i)
+                break
 
         # Add everything to viewer
         self._add_all_to_viewer()
@@ -1792,6 +1998,8 @@ class LayersTab(QWidget):
         # Set active core
         self.core_combo.setCurrentText(cores[0])
         self._on_core_swapped(cores[0])
+        self._update_protein_button()
+        self._update_gene_button()
         self.sv.reset_view()
 
         # Dynamic rows for user-defined segmentation
@@ -2133,21 +2341,7 @@ class LayersTab(QWidget):
         # Restore genes
         for gene in self.active_genes:
             try:
-
-                row = TranscriptChannelRow(
-                    gene,
-                    self.sv,
-                    self.loader,
-                )
-
-                row.layers_tab = self
-
-                self._apply_saved_gene_color(row, gene,)
-
-                row.vis_chk.setChecked(True)
-
-                row._on_change()
-
+                self._restore_gene_layer(gene)
             except Exception:
                 pass
 
@@ -2253,8 +2447,7 @@ class LayersTab(QWidget):
         )
 
         if not text:
-            self.gene_rows_widget.hide()
-            self.scroll_content.update()
+            self.gene_search_scroll.hide()
             return
 
         self.gene_rows_widget.show()        
@@ -2265,12 +2458,28 @@ class LayersTab(QWidget):
             if text in g.lower()
         ]
 
+        # Prevent huge result sets from generating thousands of widgets
+        MAX_VISIBLE_ROWS = 25
+
+        visible_rows = min(
+            len(matches),
+            MAX_VISIBLE_ROWS
+        )
+
+        row_height = 30
+
+        self.gene_search_scroll.setMaximumHeight(
+            min(
+                visible_rows * row_height + 10,
+                120
+            )
+        )
+
+        self.gene_search_scroll.show()
+
         self.gene_rows_widget.setUpdatesEnabled(False)
 
         self._clear_qt_layout(self.gene_rows_layout)
-
-        # Prevent huge result sets from generating thousands of widgets
-        MAX_VISIBLE_ROWS = 25
 
         for gene in matches[:MAX_VISIBLE_ROWS]:
             row = TranscriptChannelRow(
@@ -2292,17 +2501,19 @@ class LayersTab(QWidget):
 
         self.scroll_content.update()
 
-    # Unselect all genes
-    def _unselect_all_genes(self):
-        self._remove_all_transcript_layers()
+    ## Filter proteins for searching
+    def _filter_proteins(self, text):
 
-        for row in self.gene_rows_layout.parent().findChildren(
-            TranscriptChannelRow
-        ):
-            try:
-                row.vis_chk.setChecked(False)
-            except Exception:
-                pass
+        text = text.strip().lower()
+
+        for row in self.comet_rows:
+
+            visible = (
+                not text
+                or text in row.marker.lower()
+            )
+
+            row.setVisible(visible)
 
 
     ## Add export method
@@ -2769,15 +2980,14 @@ class LayersTab(QWidget):
 
                 row.layers_tab = self
 
-                self._apply_saved_gene_color(row, gene,)
+                self._apply_saved_gene_color(row, gene)
 
-                row.vis_chk.blockSignals(True)
-                row.vis_chk.setChecked(True)
-                row.vis_chk.blockSignals(False)
+                if gene in self.active_genes:
+                    row.vis_chk.blockSignals(True)
+                    row.vis_chk.setChecked(True)
+                    row.vis_chk.blockSignals(False)
 
-                self.active_genes_layout.addWidget(
-                    row
-                )
+                self.active_genes_layout.addWidget(row)
 
             # Recent genes panel
             self._clear_qt_layout(
@@ -2798,11 +3008,196 @@ class LayersTab(QWidget):
 
                 row.layers_tab = self
 
-                self._apply_saved_gene_color(row, gene,)
+                self._apply_saved_gene_color(row, gene)
+
+                if gene in self.active_genes:
+                    row.vis_chk.blockSignals(True)
+                    row.vis_chk.setChecked(True)
+                    row.vis_chk.blockSignals(False)
 
                 self.recent_genes_layout.addWidget(row)
+
         finally:
             self._refreshing_gene_panels = False
+
+        # Update visibility of panels based on content
+        self.active_group.setVisible(
+            len(self.active_genes) > 0
+        )
+
+        self.active_genes_widget.setVisible(
+            len(self.active_genes) > 0
+        )
+
+        recent_non_favourites = [
+            g
+            for g in self.recent_genes
+            if g not in DEFAULT_FAVOURITE_GENES
+        ]
+
+        self.recent_group.setVisible(
+            len(recent_non_favourites) > 0
+        )
+
+        self.recent_genes_widget.setVisible(
+            len(recent_non_favourites) > 0
+        )
+
+
+    ## Gene search button clicked
+    def _gene_button_clicked(self):
+        if self.hidden_genes:
+            self._restore_genes()
+        else:
+            self._hide_genes()
+
+    
+    ## Hide genes
+    def _hide_genes(self):
+        self.hidden_genes = self.active_genes.copy()
+        self._remove_all_transcript_layers()
+        self.active_genes.clear()
+        self._refresh_gene_panels()
+        self._update_gene_button()
+
+
+    ## Restore genes
+    def _restore_genes(self):
+        self._restoring_genes = True
+
+        try:
+            self.active_genes = self.hidden_genes.copy()
+            self.hidden_genes.clear()
+
+            self._on_core_swapped(
+                self.core_combo.currentText()
+            )
+
+        finally:
+            self._restoring_genes = False
+
+        self._refresh_gene_panels()
+        self._update_gene_button()
+
+    
+    ## Reload genes
+    def _restore_gene_layer(self, gene):
+        """
+        Reload a gene layer without constructing a temporary UI widget.
+        """
+
+        row = TranscriptChannelRow(
+            gene,
+            self.sv,
+            self.loader,
+        )
+
+        row.layers_tab = self
+
+        if gene in self.active_gene_colors:
+            row.color = self.active_gene_colors[gene]
+
+        row.vis_chk.blockSignals(True)
+        row.vis_chk.setChecked(True)
+        row.vis_chk.blockSignals(False)
+
+        row._on_change()
+
+
+    ## Gene button state
+    def _update_gene_button(self):
+        if self.hidden_genes:
+
+            self.clear_gene_layers_btn.show()
+
+            self.clear_gene_layers_btn.setText(
+                f"Restore Genes ({len(self.hidden_genes)} hidden)"
+            )
+
+        elif self.active_genes:
+
+            self.clear_gene_layers_btn.show()
+
+            self.clear_gene_layers_btn.setText(
+                f"Hide Genes ({len(self.active_genes)} selected)"
+            )
+
+        else:
+            self.clear_gene_layers_btn.hide()
+
+
+    ## Protein search button clicked
+    def _protein_button_clicked(self):
+        if self.hidden_proteins:
+            self._restore_proteins()
+        else:
+            self._hide_proteins()
+
+
+    ## Hide proteins
+    def _hide_proteins(self):
+        self._hiding_proteins = True
+
+        try:
+            self.hidden_proteins = self.active_proteins.copy()
+
+            for row in self.comet_rows:
+
+                if row.marker in self.active_proteins:
+
+                    row.vis_chk.blockSignals(True)
+                    row.vis_chk.setChecked(False)
+                    row.vis_chk.blockSignals(False)
+
+                    row._on_change()
+
+            self.active_proteins.clear()
+
+        finally:
+            self._hiding_proteins = False
+
+        self._update_protein_button()
+
+
+    ## Restore proteins
+    def _restore_proteins(self):
+        self.active_proteins = self.hidden_proteins.copy()
+
+        self.hidden_proteins.clear()
+
+        for row in self.comet_rows:
+
+            if row.marker in self.active_proteins:
+
+                row.vis_chk.blockSignals(True)
+                row.vis_chk.setChecked(True)
+                row.vis_chk.blockSignals(False)
+
+                row._on_change()
+
+        self._update_protein_button()
+
+
+    ## Update protein button
+    def _update_protein_button(self):
+        if self.hidden_proteins:
+
+            self.clear_protein_layers_btn.show()
+
+            self.clear_protein_layers_btn.setText(
+                f"Restore Proteins ({len(self.hidden_proteins)} hidden)"
+            )
+
+        elif self.active_proteins:
+
+            self.clear_protein_layers_btn.show()
+
+            self.clear_protein_layers_btn.setText(
+                f"Hide Proteins ({len(self.active_proteins)} selected)"
+            )
+
+        else:
+            self.clear_protein_layers_btn.hide()
 
 
 # Minimal helper tabs (kept for completeness)
