@@ -200,24 +200,24 @@ This workflow is intentionally separated from the core package so that UnumLocal
 ```
 UnumLocalia/
 ├── unumlocalia/
-│   ├── __init__.py        ← Public API + version
-│   ├── io.py              ← Auto-detection, lazy loading, alignment
-│   ├── viewer.py          ← napari layer management + cell inspector
-│   ├── widgets.py         ← PyQt GUI panels
-│   └── utils.py           ← Shared math + export utilities
+│   ├── __init__.py                 ← Public API + version
+│   ├── cli.py                      ← Version information
+│   ├── io.py                       ← Auto-detection, lazy loading, alignment
+│   ├── utils.py                    ← Shared math + export utilities
+│   ├── viewer.py                   ← napari layer management + cell inspector
+│   └── widgets.py                  ← PyQt GUI panels
 │
-├── analysis/              ← Analysis workflow
-│   ├── clustering.py
-│   ├── requirements.txt
-│   ├── requirements.lock
+├── analysis/                       ← Analysis workflow
 │   ├── environment.yml
 │   ├── README.md
+│   └── unumlocalia_clustering.py
 │
-├── environment.yml        ← Mamba environment
-├── README.md
+├── CHANGELOG.md
+├── environment.yml                 ← Mamba environment
 ├── LICENSE
-├── setup.py
-└── pyproject.toml
+├── pyproject.toml
+├── README.md
+└── setup.py
 ```
 
 ---
