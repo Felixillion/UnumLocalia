@@ -224,7 +224,7 @@ UnumLocalia/
 │   ├── README.md
 │   └── unumlocalia_clustering.py
 │
-├── images/                         ← Images for README
+├── images/                         ← Images for README and icon
 │   ├── unumlocalia_icon.png
 │   ├── unumlocalia_logo.webp
 │   └── unumlocalia_workflow.webp
