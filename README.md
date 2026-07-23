@@ -271,7 +271,7 @@ The Zenodo archive contains:
 
 If you use UnumLocalia in your research, please cite:
 
-> *An open multimodal spatial resource integrating transcriptomics, proteomics and histology from the same tissue section.*
+> *An open multimodal spatial resource integrating same-tissue transcriptomics, proteomics, and histology.*
 > (manuscript in preparation)
 
 ---
