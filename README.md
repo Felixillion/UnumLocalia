@@ -1,6 +1,18 @@
+<p align="center">
+    <img src="images/unumlocalia_logo.webp" width="200">
+</p>
+
+<p align="center">
+    <strong><em>One spatial framework for H&E, Xenium, and COMET data.</em></strong>
+</p>
+
 # UnumLocalia
 
 **UnumLocalia** is an open-source Python toolkit for visualising, exploring, and quantifying multimodal spatial biology datasets. It provides an interactive environment for viewing H&E images, COMET protein imaging, Xenium transcripts, and cell segmentations, while supporting cell quantification, segmentation benchmarking, and reproducible analysis workflows — all without modifying the original data.
+
+<p align="center">
+    <img src="images/unumlocalia_workflow.webp" height="300">
+</p>
 
 ---
 
@@ -211,6 +223,11 @@ UnumLocalia/
 │   ├── environment.yml
 │   ├── README.md
 │   └── unumlocalia_clustering.py
+│
+├── images/                         ← Images for README
+│   ├── unumlocalia_icon.png
+│   ├── unumlocalia_logo.webp
+│   └── unumlocalia_workflow.webp
 │
 ├── CHANGELOG.md
 ├── environment.yml                 ← Mamba environment

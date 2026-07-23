@@ -29,12 +29,15 @@ import json
 # Suppress warnings
 import warnings
 
+# Set path across Mac/Windows
+from pathlib import Path
+
 logger = logging.getLogger(__name__)
 
 try:
     from qtpy import QtWidgets
     from qtpy.QtCore import Qt, Signal
-    from qtpy.QtGui import QFont, QColor
+    from qtpy.QtGui import QFont, QColor, QIcon
     from qtpy.QtWidgets import (
         QApplication,
         QCheckBox,
@@ -3450,6 +3453,33 @@ def launch():
         raise
 
     sv = SpatialViewer("UnumLocalia")
+
+    # Import logo
+    try:
+        icon_path = (
+            Path(__file__).parent.parent
+            / "images"
+            / "unumlocalia_icon.png"
+        )
+
+        app = QApplication.instance()
+
+        if app is not None:
+            app.setWindowIcon(
+                QIcon(str(icon_path))
+            )
+    except Exception:
+        logger.exception(
+            "Failed to set application icon"
+        )
+
+    # Set viewer window
+    try:
+        sv.viewer.window._qt_window.setWindowIcon(
+            QIcon(str(icon_path))
+        )
+    except Exception:
+        pass
 
     data_tab = DataTab()
     layers_tab = LayersTab(sv)
