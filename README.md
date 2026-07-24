@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-    <strong><em>One spatial framework for H&E, Xenium, and COMET data.</em></strong>
+    <strong><em>One Spatial framework for H&E, Xenium, and COMET data.</em></strong>
 </p>
 
 # UnumLocalia
