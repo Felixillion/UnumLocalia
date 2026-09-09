@@ -29,6 +29,9 @@ from unumlocalia.utils import safe_read_csv, safe_read_parquet
 # PIL for rasterization
 from PIL import Image, ImageDraw
 
+# For exporting web-based data
+import os
+
 # For calculating single cell data
 from scipy import ndimage
 
@@ -1299,6 +1302,296 @@ class DatasetLoader:
         df.to_csv(
             path,
             index=False,
+        )
+
+
+    # Function for exporting core into a lightweight web-viewable format
+    def export_web_core(
+        self,
+        core_id: str,
+        output_folder,
+        max_image_size: int = 4096,
+    ):
+        """
+        Export a core into a lightweight web-viewable format.
+
+        Output:
+
+        core_web/
+            metadata.json
+            images/he.webp
+            genes/*.parquet
+            segmentations/xenium_cells.parquet
+        """
+
+        from pathlib import Path
+
+        output_folder = Path(output_folder)
+        core_folder = output_folder / f"{core_id}_web"
+
+        images_dir = core_folder / "images"
+        genes_dir = core_folder / "genes"
+        seg_dir = core_folder / "segmentations"
+        proteins_dir = core_folder / "proteins"
+
+        images_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        genes_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        seg_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        proteins_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        logger.info(
+            "Exporting web dataset for %s",
+            core_id,
+        )
+
+        ## Export H&E
+        he_width = 0
+        he_height = 0
+
+        original_width = 0
+        original_height = 0
+
+        if core_id in self.he_arrays:
+
+            he = self.he_arrays[core_id]
+
+            img = Image.fromarray(
+                np.asarray(he)
+            )
+
+            original_height = he.shape[0]
+            original_width = he.shape[1]
+
+            img.thumbnail(
+                (
+                    max_image_size,
+                    max_image_size,
+                ),
+                Image.Resampling.LANCZOS,
+            )
+
+            he_width = img.width
+            he_height = img.height
+
+            img.save(
+                images_dir / "he.webp",
+                format="WEBP",
+                quality=85,
+            )
+
+        ## Export genes
+        core = self.manifest.cores[core_id]
+
+        gene_files = {}
+
+        if core.transcripts is not None:
+
+            tx = safe_read_parquet(
+                core.transcripts,
+                columns=[
+                    "feature_name",
+                    "x_location",
+                    "y_location",
+                ],
+            )
+
+            tx = tx[
+                ~tx["feature_name"]
+                .astype(str)
+                .str.startswith(
+                    BAD_GENE_PREFIXES,
+                    na=False,
+                )
+            ]
+
+            M_fit = self.transcript_affine_by_core.get(
+                core_id
+            )
+
+            for gene, group in tx.groupby(
+                "feature_name"
+            ):
+
+                safe_gene = "".join(
+                    c if c.isalnum() or c in ("_", "-")
+                    else "_"
+                    for c in str(gene)
+                )
+
+                gene_files[str(gene)] = (
+                    f"{safe_gene}.parquet"
+                )
+
+                coords = group[
+                    [
+                        "x_location",
+                        "y_location",
+                    ]
+                ].to_numpy(
+                    dtype=float
+                )
+
+                if M_fit is not None:
+
+                    M = np.asarray(
+                        M_fit,
+                        dtype=float,
+                    )
+
+                    if M.shape == (2, 3):
+                        M = np.vstack(
+                            [
+                                M,
+                                [0, 0, 1],
+                            ]
+                        )
+
+                    H = np.hstack(
+                        [
+                            coords,
+                            np.ones(
+                                (
+                                    len(coords),
+                                    1,
+                                )
+                            ),
+                        ]
+                    )
+
+                    coords = (
+                        H @ M.T
+                    )[:, :2]
+
+                pd.DataFrame(
+                    {
+                        "x": coords[:, 0],
+                        "y": coords[:, 1],
+                    }
+                ).to_parquet(
+                    genes_dir
+                    / f"{safe_gene}.parquet",
+                    index=False,
+                )
+
+        ## Export cell masks
+        if core_id in self.cell_boundaries_df:
+
+            df_cb = self.cell_boundaries_df[
+                core_id
+            ]
+
+            M_fit = self.transcript_affine_by_core.get(
+                core_id
+            )
+
+            rows = []
+
+            for cell_id, group in df_cb.groupby(
+                "cell_id",
+                sort=False,
+            ):
+
+                xy = group[
+                    [
+                        "vertex_x",
+                        "vertex_y",
+                    ]
+                ].to_numpy(
+                    dtype=float
+                )
+
+                if (
+                    M_fit is not None
+                    and len(xy)
+                ):
+
+                    H = np.hstack(
+                        [
+                            xy,
+                            np.ones(
+                                (
+                                    len(xy),
+                                    1,
+                                )
+                            ),
+                        ]
+                    )
+
+                    xy = (
+                        H
+                        @ np.asarray(
+                            M_fit
+                        ).T
+                    )[:, :2]
+
+                rows.append(
+                    {
+                        "cell_id": str(cell_id),
+                        "vertices": xy.tolist(),
+                    }
+                )
+
+            pd.DataFrame(
+                rows
+            ).to_parquet(
+                seg_dir
+                / "xenium_cells.parquet",
+                index=False,
+            )
+
+
+        ## Export metadata
+        metadata = {
+            "core": core_id,
+            "export_version": "1.0",
+            "image": {
+                "file": "images/he.webp",
+                "width": he_width,
+                "height": he_height,
+                "original_width": original_width,
+                "original_height": original_height,
+            },
+            "genes": gene_files
+            if core.transcripts is not None
+            else {},
+            "proteins": {},
+
+            "segmentations": {
+                "xenium_cells":
+                    "segmentations/xenium_cells.parquet"
+            },
+        }
+
+        with open(
+            core_folder
+            / "metadata.json",
+            "w",
+        ) as f:
+
+            json.dump(
+                metadata,
+                f,
+                indent=2,
+            )
+
+        logger.info(
+            "Finished exporting %s",
+            core_id,
         )
 
 

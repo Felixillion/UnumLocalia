@@ -3203,6 +3203,146 @@ class LayersTab(QWidget):
             self.clear_protein_layers_btn.hide()
 
 
+# Web export tab
+class WebExportTab(QWidget):
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.loader = None
+
+        layout = QVBoxLayout(self)
+
+        layout.addWidget(QLabel("Core"))
+
+        self.core_combo = QComboBox()
+        layout.addWidget(self.core_combo)
+
+        layout.addWidget(QLabel("Output Folder"))
+
+        path_layout = QHBoxLayout()
+
+        self.output_edit = QLineEdit()
+
+        self.browse_btn = QPushButton(
+            "Browse..."
+        )
+
+        self.browse_btn.clicked.connect(
+            self._browse
+        )
+
+        path_layout.addWidget(
+            self.output_edit
+        )
+
+        path_layout.addWidget(
+            self.browse_btn
+        )
+
+        layout.addLayout(path_layout)
+
+        layout.addWidget(
+            QLabel("Maximum Height (pixels)")
+        )
+
+        self.image_size = QSpinBox()
+
+        self.image_size.setRange(
+            512,
+            8192,
+        )
+
+        self.image_size.setValue(4096)
+
+        layout.addWidget(
+            self.image_size
+        )
+
+        self.export_btn = QPushButton(
+            "Export Web Dataset"
+        )
+
+        layout.addWidget(
+            self.export_btn
+        )
+
+        self.status_label = QLabel(
+            "No export performed"
+        )
+
+        layout.addWidget(
+            self.status_label
+        )
+
+        layout.addStretch()
+
+        self.export_btn.clicked.connect(
+            self._export
+        )
+
+    def set_loader(self, loader):
+
+        self.loader = loader
+
+        self.core_combo.clear()
+
+        self.core_combo.addItems(
+            sorted(
+                loader.manifest.cores.keys()
+            )
+        )
+
+    def _browse(self):
+
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Export Location",
+        )
+
+        if folder:
+            self.output_edit.setText(
+                folder
+            )
+
+    def _export(self):
+
+        if self.loader is None:
+            return
+
+        core = self.core_combo.currentText()
+
+        output = self.output_edit.text()
+
+        if not output:
+            self.status_label.setText(
+                "Select output folder"
+            )
+            return
+
+        try:
+
+            self.loader.export_web_core(
+                core,
+                output,
+                max_image_size=
+                self.image_size.value(),
+            )
+
+            self.status_label.setText(
+                f"Exported {core}"
+            )
+
+        except Exception as e:
+
+            logger.exception(
+                "Web export failed"
+            )
+
+            self.status_label.setText(
+                f"Error: {e}"
+            )
+
 # Minimal helper tabs (kept for completeness)
 class CellQuantificationTab(QWidget):
     def __init__(self, sv, parent=None):
@@ -3481,15 +3621,19 @@ def launch():
     except Exception:
         pass
 
+    # Tabs
     data_tab = DataTab()
     layers_tab = LayersTab(sv)
     cell_quant_tab = CellQuantificationTab(sv)
+    web_export_tab = WebExportTab()
 
     layers_tab.cell_quant_tab = cell_quant_tab
 
     # wire dataset_loaded signal to layers_tab.populate
     data_tab.dataset_loaded.connect(layers_tab.populate)
     data_tab.dataset_loaded.connect(cell_quant_tab.set_loader)
+
+    data_tab.dataset_loaded.connect(web_export_tab.set_loader)
 
     ## Save session
     def save_session():
@@ -3652,6 +3796,7 @@ def launch():
     tabs.addTab(data_tab, "Data")
     tabs.addTab(layers_tab, "Layers")
     tabs.addTab(cell_quant_tab, "Cell Quantification")
+    tabs.addTab(web_export_tab, "Web Export")
 
     # attach to viewer window (viewer implementation must provide add_dock_widget)
     try:
