@@ -3218,6 +3218,23 @@ class WebExportTab(QWidget):
         self.core_combo = QComboBox()
         layout.addWidget(self.core_combo)
 
+        layout.addWidget(
+            QLabel("Segmentations")
+        )
+
+        self.seg_checks_widget = QWidget()
+
+        self.seg_checks_layout = QVBoxLayout(
+            self.seg_checks_widget
+        )
+
+        layout.addWidget(self.seg_checks_widget)
+
+        # Refresh tab for cell segmentations
+        self.refresh_seg_btn = QPushButton("Refresh Segmentations")
+        self.refresh_seg_btn.clicked.connect(self._refresh_segmentations)
+        layout.addWidget(self.refresh_seg_btn)
+
         layout.addWidget(QLabel("Output Folder"))
 
         path_layout = QHBoxLayout()
@@ -3243,7 +3260,16 @@ class WebExportTab(QWidget):
         layout.addLayout(path_layout)
 
         layout.addWidget(
-            QLabel("Maximum Height (pixels)")
+            QLabel("Maximum H&E Dimension (pixels)")
+        )
+
+        layout.addWidget(
+            QLabel(
+                "1024: phones\n"
+                "2048: tablets\n"
+                "4096: desktop browsers\n"
+                "Higher values improve image quality but increase export size."
+            )
         )
 
         self.image_size = QSpinBox()
@@ -3293,6 +3319,12 @@ class WebExportTab(QWidget):
             )
         )
 
+        self.core_combo.currentTextChanged.connect(
+            self._refresh_segmentations
+        )
+
+        self._refresh_segmentations()
+
     def _browse(self):
 
         folder = QFileDialog.getExistingDirectory(
@@ -3322,11 +3354,20 @@ class WebExportTab(QWidget):
 
         try:
 
+            selected_segmentations = [
+                name
+                for name, chk
+                in self.seg_checkboxes.items()
+                if chk.isChecked()
+            ]
+
             self.loader.export_web_core(
                 core,
                 output,
                 max_image_size=
                 self.image_size.value(),
+                segmentations=
+                selected_segmentations,
             )
 
             self.status_label.setText(
@@ -3342,6 +3383,56 @@ class WebExportTab(QWidget):
             self.status_label.setText(
                 f"Error: {e}"
             )
+
+    def _refresh_segmentations(self):
+
+        while self.seg_checks_layout.count():
+
+            item = self.seg_checks_layout.takeAt(0)
+
+            w = item.widget()
+
+            if w is not None:
+                w.deleteLater()
+
+        self.seg_checkboxes = {}
+
+        if self.loader is None:
+            return
+
+        core = self.core_combo.currentText()
+
+        # Xenium cell masks (default)
+        chk = QCheckBox(
+            "Xenium cells"
+        )
+
+        chk.setChecked(True)
+
+        self.seg_checks_layout.addWidget(chk)
+
+        self.seg_checkboxes["cells"] = chk
+
+        # Custom segmentations
+        for seg_name in sorted(
+            self.loader.custom_segmentations
+            .get(core, {})
+            .keys()
+        ):
+
+            if seg_name == "cells":
+                continue
+
+            chk = QCheckBox(seg_name)
+
+            chk.setChecked(True)
+
+            self.seg_checks_layout.addWidget(
+                chk
+            )
+
+            self.seg_checkboxes[seg_name] = chk
+
 
 # Minimal helper tabs (kept for completeness)
 class CellQuantificationTab(QWidget):

@@ -1311,6 +1311,7 @@ class DatasetLoader:
         core_id: str,
         output_folder,
         max_image_size: int = 4096,
+        segmentations=None,
     ):
         """
         Export a core into a lightweight web-viewable format.
@@ -1488,8 +1489,17 @@ class DatasetLoader:
                     index=False,
                 )
 
-        ## Export cell masks
-        if core_id in self.cell_boundaries_df:
+        ## Export default segmentations (Xenium)
+        if segmentations is None:
+            segmentations = ["cells"]
+
+        segmentations_metadata = {}
+
+        if (
+            "cells" in segmentations
+            and
+            core_id in self.cell_boundaries_df
+        ):
 
             df_cb = self.cell_boundaries_df[
                 core_id
@@ -1554,11 +1564,98 @@ class DatasetLoader:
                 index=False,
             )
 
+            segmentations_metadata[
+                "xenium_cells"
+            ] = (
+                "segmentations/xenium_cells.parquet"
+            )
+
+        ## Export custom segmentations
+        for seg_name in segmentations:
+            if seg_name == "cells":
+                continue
+
+            seg_info = (
+                self.custom_segmentations
+                .get(core_id, {})
+                .get(seg_name)
+            )
+
+            if seg_info is None:
+                continue
+
+            src_path = seg_info.get("path")
+
+            if not src_path:
+                continue
+
+            with open(src_path, "r") as f:
+                gj = json.load(f)
+
+            rows = []
+
+            for i, feat in enumerate(
+                gj.get("features", [])
+            ):
+
+                geom = feat.get("geometry")
+
+                if geom is None:
+                    continue
+
+                try:
+
+                    poly = shape(geom)
+
+                    if not poly.is_valid:
+                        poly = make_valid(poly)
+
+                    if poly.geom_type == "MultiPolygon":
+
+                        poly = max(
+                            poly.geoms,
+                            key=lambda p: p.area,
+                        )
+
+                    coords = np.asarray(
+                        poly.exterior.coords,
+                        dtype=float,
+                    )
+
+                    rows.append(
+                        {
+                            "cell_id": str(i),
+                            "vertices": coords.tolist(),
+                        }
+                    )
+
+                except Exception:
+                    continue
+
+            parquet_name = (
+                f"{seg_name}.parquet"
+            )
+
+            pd.DataFrame(
+                rows
+            ).to_parquet(
+                seg_dir / parquet_name,
+                index=False,
+            )
+
+            segmentations_metadata[
+                seg_name
+            ] = (
+                f"segmentations/{parquet_name}"
+            )
+
 
         ## Export metadata
         metadata = {
             "core": core_id,
+
             "export_version": "1.0",
+
             "image": {
                 "file": "images/he.webp",
                 "width": he_width,
@@ -1566,15 +1663,17 @@ class DatasetLoader:
                 "original_width": original_width,
                 "original_height": original_height,
             },
-            "genes": gene_files
-            if core.transcripts is not None
-            else {},
+
+            "genes": (
+                gene_files
+                if core.transcripts is not None
+                else {}
+            ),
+
             "proteins": {},
 
-            "segmentations": {
-                "xenium_cells":
-                    "segmentations/xenium_cells.parquet"
-            },
+            "segmentations":
+                segmentations_metadata,
         }
 
         with open(
