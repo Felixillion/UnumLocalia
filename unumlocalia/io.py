@@ -1649,6 +1649,131 @@ class DatasetLoader:
                 f"segmentations/{parquet_name}"
             )
 
+        ## Export proteins
+        protein_files = {}
+        protein_display_thresholds = {}
+
+        if core_id in self.comet_markers:
+
+            for channel_index, marker_name in enumerate(
+                self.comet_markers[core_id]
+            ):
+
+                try:
+
+                    channel = np.asarray(
+                        self.get_comet_channel(
+                            core_id,
+                            channel_index=channel_index,
+                        ),
+                        dtype=np.float32,
+                    )
+
+                    # Determine thresholds for this marker
+                    min_thresh, max_thresh = (
+                        self.comet_thresholds
+                        .get(core_id, {})
+                        .get(
+                            marker_name,
+                            (0.0, 1000.0),
+                        )
+                    )
+
+                    # Determine display thresholds for this marker
+                    display_min = 0
+                    display_max = 255
+
+                    protein_display_thresholds[
+                        marker_name
+                    ] = {
+                        "min": display_min,
+                        "max": display_max,
+                    }
+
+                    # Set pixels below min_thresh to 0, and scale the rest to [0, 255]
+                    mask = channel >= min_thresh
+
+                    foreground = np.clip(
+                        channel,
+                        min_thresh,
+                        max_thresh,
+                    )
+
+                    foreground = (
+                        (
+                            foreground
+                            - min_thresh
+                        )
+                        /
+                        max(
+                            max_thresh - min_thresh,
+                            1,
+                        )
+                        * 255
+                    )
+
+                    channel_small = np.where(
+                        mask,
+                        foreground,
+                        0,
+                    ).astype(np.uint8)
+
+                    img = Image.fromarray(
+                        channel_small,
+                        mode="L",
+                    )
+
+                    img.thumbnail(
+                        (
+                            max_image_size,
+                            max_image_size,
+                        ),
+                        Image.Resampling.LANCZOS,
+                    )
+
+                    channel_small = np.asarray(
+                        img
+                    ).copy()
+
+                    channel_small[
+                        channel_small < 5
+                    ] = 0
+
+                    safe_marker = "".join(
+                        c if c.isalnum() or c in ("_", "-")
+                        else "_"
+                        for c in marker_name
+                    )
+
+                    filename = (
+                        f"{safe_marker}.webp"
+                    )
+
+                    Image.fromarray(
+                        channel_small,
+                        mode="L",
+                    ).save(
+                        proteins_dir / filename,
+                        format="WEBP",
+                        quality=80,
+                    )
+
+                    protein_files[
+                        marker_name
+                    ] = (
+                        f"proteins/{filename}",
+                        "format": "webp",
+                    )
+
+                except Exception as e:
+
+                    logger.warning(
+                        "Protein export failed for %s (%s): %s",
+                        core_id,
+                        marker_name,
+                        e,
+                    )
+
 
         ## Export metadata
         metadata = {
@@ -1670,7 +1795,16 @@ class DatasetLoader:
                 else {}
             ),
 
-            "proteins": {},
+            "proteins": protein_files,
+
+            "protein_raw_thresholds":
+                self.comet_thresholds.get(
+                    core_id,
+                    {},
+                ),
+
+            "protein_display_thresholds":
+                protein_display_thresholds,
 
             "segmentations":
                 segmentations_metadata,
