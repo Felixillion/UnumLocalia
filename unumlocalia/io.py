@@ -1479,15 +1479,32 @@ class DatasetLoader:
                         H @ M.T
                     )[:, :2]
 
-                pd.DataFrame(
+                rows = [
                     {
-                        "x": coords[:, 0],
-                        "y": coords[:, 1],
+                        "x": float(x),
+                        "y": float(y),
                     }
-                ).to_parquet(
-                    genes_dir
-                    / f"{safe_gene}.parquet",
-                    index=False,
+                    for x, y in coords
+                ]
+
+                filename = (
+                    f"{safe_gene}.json.gz"
+                )
+
+                with gzip.open(
+                    genes_dir / filename,
+                    "wt",
+                    encoding="utf-8",
+                ) as f:
+
+                    json.dump(
+                        rows,
+                        f,
+                        separators=(",", ":"),
+                    )
+
+                gene_files[str(gene)] = (
+                    filename
                 )
 
         ## Export default segmentations (Xenium)
