@@ -1686,8 +1686,9 @@ class DatasetLoader:
                     protein_display_thresholds[
                         marker_name
                     ] = {
-                        "min": display_min,
-                        "max": display_max,
+                        "min": int(display_min),
+                        "max": int(display_max),
+                        "default_opacity": 0.8,
                     }
 
                     # Set pixels below min_thresh to 0, and scale the rest to [0, 255]
@@ -1760,10 +1761,10 @@ class DatasetLoader:
 
                     protein_files[
                         marker_name
-                    ] = (
-                        f"proteins/{filename}",
+                    ] = {
+                        "file": f"proteins/{filename}",
                         "format": "webp",
-                    )
+                    }
 
                 except Exception as e:
 
