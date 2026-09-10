@@ -20,6 +20,7 @@ import pandas as pd
 import tifffile
 import zarr
 import json
+import gzip
 
 from shapely.geometry import shape, Polygon
 from shapely.validation import make_valid
@@ -1322,7 +1323,7 @@ class DatasetLoader:
             metadata.json
             images/he.webp
             genes/*.parquet
-            segmentations/xenium_cells.parquet
+            segmentations/xenium_cells.json.gz
         """
 
         from pathlib import Path
@@ -1556,18 +1557,22 @@ class DatasetLoader:
                     }
                 )
 
-            pd.DataFrame(
-                rows
-            ).to_parquet(
-                seg_dir
-                / "xenium_cells.parquet",
-                index=False,
-            )
+            with gzip.open(
+                seg_dir / "xenium_cells.json.gz",
+                "wt",
+                encoding="utf-8",
+            ) as f:
+
+                json.dump(
+                    rows,
+                    f,
+                    separators=(",", ":"),
+                )
 
             segmentations_metadata[
                 "xenium_cells"
             ] = (
-                "segmentations/xenium_cells.parquet"
+                "segmentations/xenium_cells.json.gz"
             )
 
         ## Export custom segmentations
@@ -1632,21 +1637,26 @@ class DatasetLoader:
                 except Exception:
                     continue
 
-            parquet_name = (
-                f"{seg_name}.parquet"
+            json_name = (
+                f"{seg_name}.json.gz"
             )
 
-            pd.DataFrame(
-                rows
-            ).to_parquet(
-                seg_dir / parquet_name,
-                index=False,
-            )
+            with gzip.open(
+                seg_dir / json_name,
+                "wt",
+                encoding="utf-8",
+            ) as f:
+
+                json.dump(
+                    rows,
+                    f,
+                    separators=(",", ":"),
+                )
 
             segmentations_metadata[
                 seg_name
             ] = (
-                f"segmentations/{parquet_name}"
+                f"segmentations/{json_name}"
             )
 
         ## Export proteins
@@ -1781,6 +1791,7 @@ class DatasetLoader:
             "core": core_id,
 
             "export_version": "1.0",
+            "viewer_version": "1.0",
 
             "image": {
                 "file": "images/he.webp",
