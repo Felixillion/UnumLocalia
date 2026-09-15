@@ -1047,7 +1047,7 @@ class TranscriptChannelRow(QWidget):
         layer_name = f"{core}::transcripts::{self.gene}"
 
         # Force loader pixel size to the known-correct value (temporary override)
-        self.loader.xenium_pixel_size_um = 0.2125
+        self.loader.aligned_pixel_size_um = 0.2125
 
         # If unchecked: remove/hide existing layer
         if not self.vis_chk.isChecked():
@@ -1084,7 +1084,7 @@ class TranscriptChannelRow(QWidget):
                 coords_mapped = (H3 @ M_f.T)[:, :2]
             else:
                 # fallback to exported inverse if fitted not present
-                px_um = float(getattr(self.loader, "xenium_pixel_size_um", 0.2125))
+                px_um = float(getattr(self.loader, "aligned_pixel_size_um", 0.2125))
                 M_exported = self.loader.alignment_matrices_comet_raw.get(core)
                 if M_exported is not None:
                     M_e = np.asarray(M_exported, dtype=float)
@@ -1098,7 +1098,7 @@ class TranscriptChannelRow(QWidget):
                     except Exception:
                         coords_mapped = coords_pix.copy()
                 else:
-                    coords_mapped = coords / (self.loader.xenium_pixel_size_um or 0.2125)
+                    coords_mapped = coords / (self.loader.aligned_pixel_size_um or 0.2125)
         except Exception:
             coords_mapped = coords.copy()
 
@@ -2642,7 +2642,9 @@ class LayersTab(QWidget):
                     self.sv.viewer.window.qt_viewer.canvas.size[0]
                 )
 
-            pixel_size_um = 0.2125
+            pixel_size_um = (
+                self.loader.aligned_pixel_size_um
+            )
 
             core = self.sv.active_core
 

@@ -351,8 +351,12 @@ class DatasetLoader:
         # store chosen affine to map transcript (x,y) in microns -> image (x,y) pixels
         # Keys: core_id -> 3x3 numpy array mapping Xenium µm -> COMET pixels
         self.transcript_affine_by_core: Dict[str, np.ndarray] = {}
-        # xenium pixel size in microns (set from manifest or OME-XML if available)
-        self.xenium_pixel_size_um: Optional[float] = None
+
+        # Native COMET image pixel size from OME metadata
+        self.comet_pixel_size_um: Optional[float] = None
+
+        # Pixel size used by the aligned coordinate system
+        self.aligned_pixel_size_um: float = 0.2125
 
         # cell masks
         self.cell_mask_by_core: Dict[str, np.ndarray] = {}
@@ -511,6 +515,7 @@ class DatasetLoader:
                             thresholds = new_thresholds
 
                         # Try to read PhysicalSizeX/Y from OME-XML if present (useful for Xenium pixel size)
+                        # Native COMET pixel size from OME metadata
                         try:
                             pix_node = root_xml.find(".//ome:Pixels", ns)
                             if pix_node is not None:
@@ -518,15 +523,11 @@ class DatasetLoader:
                                 if phys_x:
                                     try:
                                         px_um = float(phys_x)
-                                        if self.xenium_pixel_size_um is None:
-                                            self.xenium_pixel_size_um = px_um
-
-                                        # actual assignment (unchanged)
-                                        self.xenium_pixel_size_um = px_um
-
-                                        logger.info("Found PhysicalSizeX in OME-XML (µm): %s", phys_x)
+                                        self.comet_pixel_size_um = px_um
+                                        logger.info("Found COMET PhysicalSizeX (µm): %s", phys_x)
                                     except Exception:
                                         pass
+
                         except Exception:
                             pass
                 except Exception as e:
@@ -1806,9 +1807,7 @@ class DatasetLoader:
         ## Export metadata
         # Calculate scale factor for COMET pixel size
         pixel_size_um = (
-            self.xenium_pixel_size_um
-            if self.xenium_pixel_size_um is not None
-            else 0.2125
+            self.aligned_pixel_size_um
         )
 
         export_pixel_size_um = (
@@ -1824,8 +1823,11 @@ class DatasetLoader:
             "viewer_version": "1.0",
 
             # Scale factor to convert COMET pixel size to exported image pixel size
-            "pixel_size_um":
-                self.xenium_pixel_size_um,
+            "aligned_pixel_size_um":
+                self.aligned_pixel_size_um,
+
+            "comet_pixel_size_um":
+                self.comet_pixel_size_um,
 
             "web_pixel_size_um":
                 export_pixel_size_um,
