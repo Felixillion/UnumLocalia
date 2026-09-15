@@ -1322,7 +1322,7 @@ class DatasetLoader:
         core_web/
             metadata.json
             images/he.webp
-            genes/*.parquet
+            genes/*.json.gz
             segmentations/xenium_cells.json.gz
         """
 
@@ -1436,7 +1436,7 @@ class DatasetLoader:
                 )
 
                 gene_files[str(gene)] = (
-                    f"{safe_gene}.parquet"
+                    f"{safe_gene}.json.gz"
                 )
 
                 coords = group[
@@ -1802,13 +1802,27 @@ class DatasetLoader:
                         e,
                     )
 
-
         ## Export metadata
+        # Calculate scale factor for COMET pixel size
+        export_pixel_size_um = (
+            self.xenium_pixel_size_um
+            *
+            original_width
+            / he_width
+        )
+        
         metadata = {
             "core": core_id,
 
             "export_version": "1.0",
             "viewer_version": "1.0",
+
+            # Scale factor to convert COMET pixel size to exported image pixel size
+            "pixel_size_um":
+                self.xenium_pixel_size_um,
+
+            "web_pixel_size_um":
+                export_pixel_size_um,
 
             "image": {
                 "file": "images/he.webp",
