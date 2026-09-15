@@ -1887,7 +1887,7 @@ class DatasetLoader:
         with zipfile.ZipFile(
             ulviewer_path,
             "w",
-            zipfile.ZIP_DEFLATED,
+            compression=zipfile.ZIP_STORED,
         ) as zf:
 
             for file in core_folder.rglob("*"):
