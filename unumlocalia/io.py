@@ -21,6 +21,7 @@ import tifffile
 import zarr
 import json
 import gzip
+import zipfile
 
 from shapely.geometry import shape, Polygon
 from shapely.validation import make_valid
@@ -1804,11 +1805,16 @@ class DatasetLoader:
 
         ## Export metadata
         # Calculate scale factor for COMET pixel size
-        export_pixel_size_um = (
+        pixel_size_um = (
             self.xenium_pixel_size_um
-            *
-            original_width
-            / he_width
+            if self.xenium_pixel_size_um is not None
+            else 0.2125
+        )
+
+        export_pixel_size_um = (
+            pixel_size_um
+            * original_width
+            / max(he_width, 1)
         )
         
         metadata = {
@@ -1869,6 +1875,29 @@ class DatasetLoader:
             "Finished exporting %s",
             core_id,
         )
+
+        ## Export a zip file for easy download
+        ulviewer_path = (
+            output_folder /
+            f"{core_id}.ulviewer"
+        )
+
+        with zipfile.ZipFile(
+            ulviewer_path,
+            "w",
+            zipfile.ZIP_DEFLATED,
+        ) as zf:
+
+            for file in core_folder.rglob("*"):
+
+                if file.is_file():
+
+                    zf.write(
+                        file,
+                        file.relative_to(
+                            core_folder
+                        )
+                    )
 
 
     def __repr__(self) -> str:
