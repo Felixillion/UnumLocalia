@@ -56,7 +56,7 @@ The Viewer is intended for data sharing, collaboration, teaching, and rapid expl
 │   ├── xenium_cells.json.gz            ← Defaul Xenium cell segmentation
 │   ...
 │
-├── metadata.json                     ← Contains metadata information
+├── metadata.json                       ← Contains metadata information
 ```
 
 ---
