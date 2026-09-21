@@ -16,6 +16,51 @@
 
 ---
 
+## UnumLocalia Viewer
+
+**UnumLocalia Viewer** is a lightweight web-based companion to UnumLocalia that allows datasets to be shared and explored without installing Python, napari, or any additional software.
+
+Datasets exported from UnumLocalia can be packaged into a single ```.ulviewer``` file containing H&E imagery, Xenium transcripts, COMET proteins, cell segmentations, and associated metadata. These files can then be viewed directly in a modern web browser.
+
+Features include:
+- Interactive viewing of H&E, Xenium, and COMET data
+- Toggleable gene and protein overlays
+- Cell segmentation visualisation and inspection
+- Cell-level metadata display
+- Publication-ready screenshot export with scale bars
+- Single-file .ulviewer dataset sharing
+- Desktop and mobile browser support
+
+Web viewer:
+```bash
+https://felixillion.github.io/unumlocalia/
+```
+
+The Viewer is intended for data sharing, collaboration, teaching, and rapid exploration, while the full UnumLocalia desktop application remains the primary environment for quantitative analysis, segmentation benchmarking, and dataset processing.
+
+```.ulviewer``` file is a zipped folder containing:
+```
+.ulviewer/
+├── genes/
+│   ├── [GENE1].json.gz                 ← Individual files for each gene
+│   ...
+│
+├── images/
+│   ├── he.webp                         ← H&E image
+│
+├── proteins/
+│   ├── [PROTEIN1].webp                 ← Immunostaining image for each protein
+│   ...
+│
+├── segmentations/
+│   ├── xenium_cells.json.gz            ← Defaul Xenium cell segmentation
+│   ...
+│
+├── metadata.json                     ← Contains metadata information
+```
+
+---
+
 ## Quickstart
 
 **NOTE**
@@ -58,7 +103,8 @@ Example datasets are hosted on Zenodo:
 
 | Module | Functionality |
 |----------|----------|
-| **Viewer** | Interactive napari viewer for H&E, COMET, Xenium transcripts, and cell boundaries |
+| **Desktop Viewer** | Interactive napari viewer for H&E, COMET, Xenium transcripts, and cell boundaries |
+| **UnumLocalia Viewer** | Browser-based viewing and sharing of exported ```.ulviewer``` datasets |
 | **Segmentation** | Load Xenium boundaries or import custom GeoJSON segmentations |
 | **Cell Quantification** | Quantify COMET intensities and transcript counts within segmentations |
 | **Export** | Save figures (PNG), thresholds (JSON), quantified cells (CSV), and analysis sessions |

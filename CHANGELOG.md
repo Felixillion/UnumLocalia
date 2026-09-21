@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.2.0
+
+### Added
+
+- UnumLocalia can now export .ulviewer files that can be imported into the UnumLocalia Viewer.
+- Developed UnumLocalia Viewer, available here https://felixillion.github.io/unumlocalia/
+
 ## v1.1.2
 
 ### Fixed
