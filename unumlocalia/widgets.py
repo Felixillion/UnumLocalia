@@ -1047,7 +1047,7 @@ class TranscriptChannelRow(QWidget):
         layer_name = f"{core}::transcripts::{self.gene}"
 
         # Force loader pixel size to the known-correct value (temporary override)
-        self.loader.xenium_pixel_size_um = 0.2125
+        self.loader.aligned_pixel_size_um = 0.2125
 
         # If unchecked: remove/hide existing layer
         if not self.vis_chk.isChecked():
@@ -1084,7 +1084,7 @@ class TranscriptChannelRow(QWidget):
                 coords_mapped = (H3 @ M_f.T)[:, :2]
             else:
                 # fallback to exported inverse if fitted not present
-                px_um = float(getattr(self.loader, "xenium_pixel_size_um", 0.2125))
+                px_um = float(getattr(self.loader, "aligned_pixel_size_um", 0.2125))
                 M_exported = self.loader.alignment_matrices_comet_raw.get(core)
                 if M_exported is not None:
                     M_e = np.asarray(M_exported, dtype=float)
@@ -1098,7 +1098,7 @@ class TranscriptChannelRow(QWidget):
                     except Exception:
                         coords_mapped = coords_pix.copy()
                 else:
-                    coords_mapped = coords / (self.loader.xenium_pixel_size_um or 0.2125)
+                    coords_mapped = coords / (self.loader.aligned_pixel_size_um or 0.2125)
         except Exception:
             coords_mapped = coords.copy()
 
@@ -2642,7 +2642,9 @@ class LayersTab(QWidget):
                     self.sv.viewer.window.qt_viewer.canvas.size[0]
                 )
 
-            pixel_size_um = 0.2125
+            pixel_size_um = (
+                self.loader.aligned_pixel_size_um
+            )
 
             core = self.sv.active_core
 
@@ -3203,6 +3205,237 @@ class LayersTab(QWidget):
             self.clear_protein_layers_btn.hide()
 
 
+# Web export tab
+class WebExportTab(QWidget):
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.loader = None
+
+        layout = QVBoxLayout(self)
+
+        layout.addWidget(QLabel("Core"))
+
+        self.core_combo = QComboBox()
+        layout.addWidget(self.core_combo)
+
+        layout.addWidget(
+            QLabel("Segmentations")
+        )
+
+        self.seg_checks_widget = QWidget()
+
+        self.seg_checks_layout = QVBoxLayout(
+            self.seg_checks_widget
+        )
+
+        layout.addWidget(self.seg_checks_widget)
+
+        # Refresh tab for cell segmentations
+        self.refresh_seg_btn = QPushButton("Refresh Segmentations")
+        self.refresh_seg_btn.clicked.connect(self._refresh_segmentations)
+        layout.addWidget(self.refresh_seg_btn)
+
+        layout.addWidget(QLabel("Output Folder"))
+
+        path_layout = QHBoxLayout()
+
+        self.output_edit = QLineEdit()
+
+        self.browse_btn = QPushButton(
+            "Browse..."
+        )
+
+        self.browse_btn.clicked.connect(
+            self._browse
+        )
+
+        path_layout.addWidget(
+            self.output_edit
+        )
+
+        path_layout.addWidget(
+            self.browse_btn
+        )
+
+        layout.addLayout(path_layout)
+
+        layout.addWidget(
+            QLabel("Maximum H&E Dimension (pixels)")
+        )
+
+        layout.addWidget(
+            QLabel(
+                "1024: phones\n"
+                "2048: tablets\n"
+                "4096: desktop browsers\n"
+                "Higher values improve image quality but increase export size."
+            )
+        )
+
+        self.image_size = QSpinBox()
+
+        self.image_size.setRange(
+            512,
+            8192,
+        )
+
+        self.image_size.setValue(4096)
+
+        layout.addWidget(
+            self.image_size
+        )
+
+        self.export_btn = QPushButton(
+            "Export Web Dataset"
+        )
+
+        layout.addWidget(
+            self.export_btn
+        )
+
+        self.status_label = QLabel(
+            "No export performed"
+        )
+
+        layout.addWidget(
+            self.status_label
+        )
+
+        layout.addStretch()
+
+        self.export_btn.clicked.connect(
+            self._export
+        )
+
+    def set_loader(self, loader):
+
+        self.loader = loader
+
+        self.core_combo.clear()
+
+        self.core_combo.addItems(
+            sorted(
+                loader.manifest.cores.keys()
+            )
+        )
+
+        self.core_combo.currentTextChanged.connect(
+            self._refresh_segmentations
+        )
+
+        self._refresh_segmentations()
+
+    def _browse(self):
+
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Export Location",
+        )
+
+        if folder:
+            self.output_edit.setText(
+                folder
+            )
+
+    def _export(self):
+
+        if self.loader is None:
+            return
+
+        core = self.core_combo.currentText()
+
+        output = self.output_edit.text()
+
+        if not output:
+            self.status_label.setText(
+                "Select output folder"
+            )
+            return
+
+        try:
+
+            selected_segmentations = [
+                name
+                for name, chk
+                in self.seg_checkboxes.items()
+                if chk.isChecked()
+            ]
+
+            self.loader.export_web_core(
+                core,
+                output,
+                max_image_size=
+                self.image_size.value(),
+                segmentations=
+                selected_segmentations,
+            )
+
+            self.status_label.setText(
+                f"Exported {core}"
+            )
+
+        except Exception as e:
+
+            logger.exception(
+                "Web export failed"
+            )
+
+            self.status_label.setText(
+                f"Error: {e}"
+            )
+
+    def _refresh_segmentations(self):
+
+        while self.seg_checks_layout.count():
+
+            item = self.seg_checks_layout.takeAt(0)
+
+            w = item.widget()
+
+            if w is not None:
+                w.deleteLater()
+
+        self.seg_checkboxes = {}
+
+        if self.loader is None:
+            return
+
+        core = self.core_combo.currentText()
+
+        # Xenium cell masks (default)
+        chk = QCheckBox(
+            "Xenium cells"
+        )
+
+        chk.setChecked(True)
+
+        self.seg_checks_layout.addWidget(chk)
+
+        self.seg_checkboxes["cells"] = chk
+
+        # Custom segmentations
+        for seg_name in sorted(
+            self.loader.custom_segmentations
+            .get(core, {})
+            .keys()
+        ):
+
+            if seg_name == "cells":
+                continue
+
+            chk = QCheckBox(seg_name)
+
+            chk.setChecked(True)
+
+            self.seg_checks_layout.addWidget(
+                chk
+            )
+
+            self.seg_checkboxes[seg_name] = chk
+
+
 # Minimal helper tabs (kept for completeness)
 class CellQuantificationTab(QWidget):
     def __init__(self, sv, parent=None):
@@ -3481,15 +3714,19 @@ def launch():
     except Exception:
         pass
 
+    # Tabs
     data_tab = DataTab()
     layers_tab = LayersTab(sv)
     cell_quant_tab = CellQuantificationTab(sv)
+    web_export_tab = WebExportTab()
 
     layers_tab.cell_quant_tab = cell_quant_tab
 
     # wire dataset_loaded signal to layers_tab.populate
     data_tab.dataset_loaded.connect(layers_tab.populate)
     data_tab.dataset_loaded.connect(cell_quant_tab.set_loader)
+
+    data_tab.dataset_loaded.connect(web_export_tab.set_loader)
 
     ## Save session
     def save_session():
@@ -3652,6 +3889,7 @@ def launch():
     tabs.addTab(data_tab, "Data")
     tabs.addTab(layers_tab, "Layers")
     tabs.addTab(cell_quant_tab, "Cell Quantification")
+    tabs.addTab(web_export_tab, "Web Export")
 
     # attach to viewer window (viewer implementation must provide add_dock_widget)
     try:

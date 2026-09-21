@@ -9,7 +9,7 @@ with open("README.md", encoding="utf-8") as fh:
 
 setup(
     name="unumlocalia",
-    version="1.1.2",
+    version="1.2.0",
     author="UnumLocalia Contributors",
     description=(
         "A multimodal spatial biology toolkit for visualisation, "

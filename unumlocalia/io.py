@@ -20,6 +20,8 @@ import pandas as pd
 import tifffile
 import zarr
 import json
+import gzip
+import zipfile
 
 from shapely.geometry import shape, Polygon
 from shapely.validation import make_valid
@@ -28,6 +30,9 @@ from unumlocalia.utils import safe_read_csv, safe_read_parquet
 
 # PIL for rasterization
 from PIL import Image, ImageDraw
+
+# For exporting web-based data
+import os
 
 # For calculating single cell data
 from scipy import ndimage
@@ -346,8 +351,12 @@ class DatasetLoader:
         # store chosen affine to map transcript (x,y) in microns -> image (x,y) pixels
         # Keys: core_id -> 3x3 numpy array mapping Xenium µm -> COMET pixels
         self.transcript_affine_by_core: Dict[str, np.ndarray] = {}
-        # xenium pixel size in microns (set from manifest or OME-XML if available)
-        self.xenium_pixel_size_um: Optional[float] = None
+
+        # Native COMET image pixel size from OME metadata
+        self.comet_pixel_size_um: Optional[float] = None
+
+        # Pixel size used by the aligned coordinate system
+        self.aligned_pixel_size_um: float = 0.2125
 
         # cell masks
         self.cell_mask_by_core: Dict[str, np.ndarray] = {}
@@ -506,6 +515,7 @@ class DatasetLoader:
                             thresholds = new_thresholds
 
                         # Try to read PhysicalSizeX/Y from OME-XML if present (useful for Xenium pixel size)
+                        # Native COMET pixel size from OME metadata
                         try:
                             pix_node = root_xml.find(".//ome:Pixels", ns)
                             if pix_node is not None:
@@ -513,15 +523,11 @@ class DatasetLoader:
                                 if phys_x:
                                     try:
                                         px_um = float(phys_x)
-                                        if self.xenium_pixel_size_um is None:
-                                            self.xenium_pixel_size_um = px_um
-
-                                        # actual assignment (unchanged)
-                                        self.xenium_pixel_size_um = px_um
-
-                                        logger.info("Found PhysicalSizeX in OME-XML (µm): %s", phys_x)
+                                        self.comet_pixel_size_um = px_um
+                                        logger.info("Found COMET PhysicalSizeX (µm): %s", phys_x)
                                     except Exception:
                                         pass
+
                         except Exception:
                             pass
                 except Exception as e:
@@ -1300,6 +1306,600 @@ class DatasetLoader:
             path,
             index=False,
         )
+
+
+    # Function for exporting core into a lightweight web-viewable format
+    def export_web_core(
+        self,
+        core_id: str,
+        output_folder,
+        max_image_size: int = 4096,
+        segmentations=None,
+    ):
+        """
+        Export a core into a lightweight web-viewable format.
+
+        Output:
+
+        core_web/
+            metadata.json
+            images/he.webp
+            genes/*.json.gz
+            segmentations/xenium_cells.json.gz
+        """
+
+        from pathlib import Path
+
+        output_folder = Path(output_folder)
+        core_folder = output_folder / f"{core_id}_web"
+
+        images_dir = core_folder / "images"
+        genes_dir = core_folder / "genes"
+        seg_dir = core_folder / "segmentations"
+        proteins_dir = core_folder / "proteins"
+
+        images_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        genes_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        seg_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        proteins_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        logger.info(
+            "Exporting web dataset for %s",
+            core_id,
+        )
+
+        ## Export H&E
+        he_width = 0
+        he_height = 0
+
+        original_width = 0
+        original_height = 0
+
+        if core_id in self.he_arrays:
+
+            he = self.he_arrays[core_id]
+
+            img = Image.fromarray(
+                np.asarray(he)
+            )
+
+            original_height = he.shape[0]
+            original_width = he.shape[1]
+
+            img.thumbnail(
+                (
+                    max_image_size,
+                    max_image_size,
+                ),
+                Image.Resampling.LANCZOS,
+            )
+
+            he_width = img.width
+            he_height = img.height
+
+            img.save(
+                images_dir / "he.webp",
+                format="WEBP",
+                quality=85,
+            )
+
+        ## Export genes
+        core = self.manifest.cores[core_id]
+
+        gene_files = {}
+
+        if core.transcripts is not None:
+
+            tx = safe_read_parquet(
+                core.transcripts,
+                columns=[
+                    "feature_name",
+                    "x_location",
+                    "y_location",
+                ],
+            )
+
+            tx = tx[
+                ~tx["feature_name"]
+                .astype(str)
+                .str.startswith(
+                    BAD_GENE_PREFIXES,
+                    na=False,
+                )
+            ]
+
+            M_fit = self.transcript_affine_by_core.get(
+                core_id
+            )
+
+            for gene, group in tx.groupby(
+                "feature_name"
+            ):
+
+                safe_gene = "".join(
+                    c if c.isalnum() or c in ("_", "-")
+                    else "_"
+                    for c in str(gene)
+                )
+
+                gene_files[str(gene)] = (
+                    f"{safe_gene}.json.gz"
+                )
+
+                coords = group[
+                    [
+                        "x_location",
+                        "y_location",
+                    ]
+                ].to_numpy(
+                    dtype=float
+                )
+
+                if M_fit is not None:
+
+                    M = np.asarray(
+                        M_fit,
+                        dtype=float,
+                    )
+
+                    if M.shape == (2, 3):
+                        M = np.vstack(
+                            [
+                                M,
+                                [0, 0, 1],
+                            ]
+                        )
+
+                    H = np.hstack(
+                        [
+                            coords,
+                            np.ones(
+                                (
+                                    len(coords),
+                                    1,
+                                )
+                            ),
+                        ]
+                    )
+
+                    coords = (
+                        H @ M.T
+                    )[:, :2]
+
+                rows = [
+                    {
+                        "x": float(x),
+                        "y": float(y),
+                    }
+                    for x, y in coords
+                ]
+
+                filename = (
+                    f"{safe_gene}.json.gz"
+                )
+
+                with gzip.open(
+                    genes_dir / filename,
+                    "wt",
+                    encoding="utf-8",
+                ) as f:
+
+                    json.dump(
+                        rows,
+                        f,
+                        separators=(",", ":"),
+                    )
+
+                gene_files[str(gene)] = (
+                    filename
+                )
+
+        ## Export default segmentations (Xenium)
+        if segmentations is None:
+            segmentations = ["cells"]
+
+        segmentations_metadata = {}
+
+        if (
+            "cells" in segmentations
+            and
+            core_id in self.cell_boundaries_df
+        ):
+
+            df_cb = self.cell_boundaries_df[
+                core_id
+            ]
+
+            M_fit = self.transcript_affine_by_core.get(
+                core_id
+            )
+
+            rows = []
+
+            for cell_id, group in df_cb.groupby(
+                "cell_id",
+                sort=False,
+            ):
+
+                xy = group[
+                    [
+                        "vertex_x",
+                        "vertex_y",
+                    ]
+                ].to_numpy(
+                    dtype=float
+                )
+
+                if (
+                    M_fit is not None
+                    and len(xy)
+                ):
+
+                    H = np.hstack(
+                        [
+                            xy,
+                            np.ones(
+                                (
+                                    len(xy),
+                                    1,
+                                )
+                            ),
+                        ]
+                    )
+
+                    xy = (
+                        H
+                        @ np.asarray(
+                            M_fit
+                        ).T
+                    )[:, :2]
+
+                rows.append(
+                    {
+                        "cell_id": str(cell_id),
+                        "vertices": xy.tolist(),
+                    }
+                )
+
+            with gzip.open(
+                seg_dir / "xenium_cells.json.gz",
+                "wt",
+                encoding="utf-8",
+            ) as f:
+
+                json.dump(
+                    rows,
+                    f,
+                    separators=(",", ":"),
+                )
+
+            segmentations_metadata[
+                "xenium_cells"
+            ] = (
+                "segmentations/xenium_cells.json.gz"
+            )
+
+        ## Export custom segmentations
+        for seg_name in segmentations:
+            if seg_name == "cells":
+                continue
+
+            seg_info = (
+                self.custom_segmentations
+                .get(core_id, {})
+                .get(seg_name)
+            )
+
+            if seg_info is None:
+                continue
+
+            src_path = seg_info.get("path")
+
+            if not src_path:
+                continue
+
+            with open(src_path, "r") as f:
+                gj = json.load(f)
+
+            rows = []
+
+            for i, feat in enumerate(
+                gj.get("features", [])
+            ):
+
+                geom = feat.get("geometry")
+
+                if geom is None:
+                    continue
+
+                try:
+
+                    poly = shape(geom)
+
+                    if not poly.is_valid:
+                        poly = make_valid(poly)
+
+                    if poly.geom_type == "MultiPolygon":
+
+                        poly = max(
+                            poly.geoms,
+                            key=lambda p: p.area,
+                        )
+
+                    coords = np.asarray(
+                        poly.exterior.coords,
+                        dtype=float,
+                    )
+
+                    rows.append(
+                        {
+                            "cell_id": str(i),
+                            "vertices": coords.tolist(),
+                        }
+                    )
+
+                except Exception:
+                    continue
+
+            json_name = (
+                f"{seg_name}.json.gz"
+            )
+
+            with gzip.open(
+                seg_dir / json_name,
+                "wt",
+                encoding="utf-8",
+            ) as f:
+
+                json.dump(
+                    rows,
+                    f,
+                    separators=(",", ":"),
+                )
+
+            segmentations_metadata[
+                seg_name
+            ] = (
+                f"segmentations/{json_name}"
+            )
+
+        ## Export proteins
+        protein_files = {}
+        protein_display_thresholds = {}
+
+        if core_id in self.comet_markers:
+
+            for channel_index, marker_name in enumerate(
+                self.comet_markers[core_id]
+            ):
+
+                try:
+
+                    channel = np.asarray(
+                        self.get_comet_channel(
+                            core_id,
+                            channel_index=channel_index,
+                        ),
+                        dtype=np.float32,
+                    )
+
+                    # Determine thresholds for this marker
+                    min_thresh, max_thresh = (
+                        self.comet_thresholds
+                        .get(core_id, {})
+                        .get(
+                            marker_name,
+                            (0.0, 1000.0),
+                        )
+                    )
+
+                    # Determine display thresholds for this marker
+                    display_min = 0
+                    display_max = 255
+
+                    protein_display_thresholds[
+                        marker_name
+                    ] = {
+                        "min": int(display_min),
+                        "max": int(display_max),
+                        "default_opacity": 0.8,
+                    }
+
+                    # Set pixels below min_thresh to 0, and scale the rest to [0, 255]
+                    mask = channel >= min_thresh
+
+                    foreground = np.clip(
+                        channel,
+                        min_thresh,
+                        max_thresh,
+                    )
+
+                    foreground = (
+                        (
+                            foreground
+                            - min_thresh
+                        )
+                        /
+                        max(
+                            max_thresh - min_thresh,
+                            1,
+                        )
+                        * 255
+                    )
+
+                    channel_small = np.where(
+                        mask,
+                        foreground,
+                        0,
+                    ).astype(np.uint8)
+
+                    img = Image.fromarray(
+                        channel_small,
+                        mode="L",
+                    )
+
+                    img.thumbnail(
+                        (
+                            max_image_size,
+                            max_image_size,
+                        ),
+                        Image.Resampling.LANCZOS,
+                    )
+
+                    channel_small = np.asarray(
+                        img
+                    ).copy()
+
+                    channel_small[
+                        channel_small < 5
+                    ] = 0
+
+                    safe_marker = "".join(
+                        c if c.isalnum() or c in ("_", "-")
+                        else "_"
+                        for c in marker_name
+                    )
+
+                    filename = (
+                        f"{safe_marker}.webp"
+                    )
+
+                    Image.fromarray(
+                        channel_small,
+                        mode="L",
+                    ).save(
+                        proteins_dir / filename,
+                        format="WEBP",
+                        quality=80,
+                    )
+
+                    protein_files[
+                        marker_name
+                    ] = {
+                        "file": f"proteins/{filename}",
+                        "format": "webp",
+                    }
+
+                except Exception as e:
+
+                    logger.warning(
+                        "Protein export failed for %s (%s): %s",
+                        core_id,
+                        marker_name,
+                        e,
+                    )
+
+        ## Export metadata
+        # Calculate scale factor for COMET pixel size
+        pixel_size_um = (
+            self.aligned_pixel_size_um
+        )
+
+        export_pixel_size_um = (
+            pixel_size_um
+            * original_width
+            / max(he_width, 1)
+        )
+        
+        metadata = {
+            "core": core_id,
+
+            "export_version": "1.0",
+            "viewer_version": "1.0",
+
+            # Scale factor to convert COMET pixel size to exported image pixel size
+            "aligned_pixel_size_um":
+                self.aligned_pixel_size_um,
+
+            "comet_pixel_size_um":
+                self.comet_pixel_size_um,
+
+            "web_pixel_size_um":
+                export_pixel_size_um,
+
+            "image": {
+                "file": "images/he.webp",
+                "width": he_width,
+                "height": he_height,
+                "original_width": original_width,
+                "original_height": original_height,
+            },
+
+            "genes": (
+                gene_files
+                if core.transcripts is not None
+                else {}
+            ),
+
+            "proteins": protein_files,
+
+            "protein_raw_thresholds":
+                self.comet_thresholds.get(
+                    core_id,
+                    {},
+                ),
+
+            "protein_display_thresholds":
+                protein_display_thresholds,
+
+            "segmentations":
+                segmentations_metadata,
+        }
+
+        with open(
+            core_folder
+            / "metadata.json",
+            "w",
+        ) as f:
+
+            json.dump(
+                metadata,
+                f,
+                indent=2,
+            )
+
+        logger.info(
+            "Finished exporting %s",
+            core_id,
+        )
+
+        ## Export a zip file for easy download
+        ulviewer_path = (
+            output_folder /
+            f"{core_id}.ulviewer"
+        )
+
+        with zipfile.ZipFile(
+            ulviewer_path,
+            "w",
+            compression=zipfile.ZIP_STORED,
+        ) as zf:
+
+            for file in core_folder.rglob("*"):
+
+                if file.is_file():
+
+                    zf.write(
+                        file,
+                        file.relative_to(
+                            core_folder
+                        )
+                    )
 
 
     def __repr__(self) -> str:
